@@ -9,7 +9,9 @@
       "Bash(brew install *)",
       "Bash(echo \"exit=$?\")",
       "Bash(git add *)",
-      "Bash(git commit -q -m 'Add SPI front-end RTL \\(LVDS-fed input capture + edge detection\\) *)"
+      "Bash(git commit -q -m 'Add SPI front-end RTL \\(LVDS-fed input capture + edge detection\\) *)",
+      "Bash(git commit -q -m 'Add RHD2164 emulator testbench *)",
+      "Bash(git commit -q -m 'Update local settings allowlist *)"
     ]
   }
 }
