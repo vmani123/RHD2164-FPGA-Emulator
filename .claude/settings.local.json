@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pip3 install *)",
+      "Bash(python3 -c ' *)",
+      "Bash(python3 -m venv /tmp/pdfenv)",
+      "Bash(/tmp/pdfenv/bin/pip install *)",
+      "Bash(/tmp/pdfenv/bin/python3 -c ' *)"
+    ]
+  }
+}

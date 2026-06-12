@@ -1,0 +1,19 @@
+# Vivado
+*.jou
+*.log
+.Xil/
+vivado*.str
+vivado*.zip
+*.cache/
+*.hw/
+*.ip_user_files/
+*.runs/
+*.sim/
+*.gen/
+*.srcs/
+# Sim
+xsim.dir/
+*.wdb
+*.vcd
+*.pb
+webtalk*
