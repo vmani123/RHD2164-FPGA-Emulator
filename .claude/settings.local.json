@@ -5,7 +5,11 @@
       "Bash(python3 -c ' *)",
       "Bash(python3 -m venv /tmp/pdfenv)",
       "Bash(/tmp/pdfenv/bin/pip install *)",
-      "Bash(/tmp/pdfenv/bin/python3 -c ' *)"
+      "Bash(/tmp/pdfenv/bin/python3 -c ' *)",
+      "Bash(brew install *)",
+      "Bash(echo \"exit=$?\")",
+      "Bash(git add *)",
+      "Bash(git commit -q -m 'Add SPI front-end RTL \\(LVDS-fed input capture + edge detection\\) *)"
     ]
   }
 }
