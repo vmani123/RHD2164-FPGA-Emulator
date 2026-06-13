@@ -66,6 +66,7 @@ module command_decoder (
     // Latched command + sequencing state, updated once per command.
     // ------------------------------------------------------------------
     reg  [15:0] cmd_r;       // latched command (drives combinational result)
+    reg         ignored_r;   // latched "in dummy window" status for cmd_r
     reg  [3:0]  calib_cnt;   // >0 => inside the post-CALIBRATE dummy window
     reg  [4:0]  mux_ptr;     // CONVERT(63) auto-increment pointer (0..31)
 
@@ -77,11 +78,13 @@ module command_decoder (
     always @(posedge clk) begin
         if (!rst_n) begin
             cmd_r     <= 16'h0000;
+            ignored_r <= 1'b0;
             calib_cnt <= 4'd0;
             mux_ptr   <= 5'd0;
             bram_addr <= 5'd0;
         end else if (cmd_valid) begin
-            cmd_r <= cmd_word;
+            cmd_r     <= cmd_word;
+            ignored_r <= ignored;   // capture status BEFORE the decrement below
 
             if (ignored) begin
                 // Command is a CALIBRATE dummy: ignore, just count down.
@@ -120,7 +123,7 @@ module command_decoder (
 
     reg [15:0] res_new_a, res_new_b;
     always @(*) begin
-        if (ignored) begin
+        if (ignored_r) begin       // use the LATCHED status for the latched cmd
             res_new_a = msb_only;
             res_new_b = msb_only;
         end else begin

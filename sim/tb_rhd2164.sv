@@ -1,19 +1,28 @@
 // ============================================================================
 // tb_rhd2164.sv  —  Testbench for the RHD2164 emulator (two chips)
 // ----------------------------------------------------------------------------
-// Drives a single-ended SPI master that mirrors the host controller:
-//   * CS framing with tCS1 / tCSOFF gaps
-//   * 16 SCLK pulses per transfer at ~24 MHz, CPOL=0, MOSI MSB-first
-//   * samples the DDR MISO exactly as the datasheet specifies:
-//       A[15:0] on the 16 SCLK FALLING edges,
-//       B[15:0] on the 16 SCLK LOW phases (B[15..1] land on rising edges
-//               2..16, B[0] on the CS rising edge).
+// Self-checking, reference-model-driven verification environment.
 //
-// Two emulator cores share CS/SCLK/MOSI (like rhd2164_top), each with its own
-// MISO. The scoreboard checks the 2-command pipeline: the word returned during
-// transfer i is the result of the command issued in transfer i-2.
+//   * An SPI master task mirrors the host controller: CS framing, 16 SCLK
+//     pulses per transfer at ~24 MHz (CPOL=0, MOSI MSB-first), and samples the
+//     DDR MISO exactly as the datasheet specifies (A on the 16 falling edges,
+//     B on the 16 low phases: B[15..1] on rising edges 2..16, B[0] on CS rise).
 //
-// Run:  see sim/run_sim.sh
+//   * An INDEPENDENT reference model (ref_step / ref_read / chanval) re-derives
+//     the expected A/B result for BOTH chips from the command stream, tracking
+//     RAM registers, twoscomp, the CALIBRATE busy window, and the CONVERT(63)
+//     MUX pointer. It is a separate implementation of the spec, so agreement
+//     with the DUT is a real cross-check, not a tautology.
+//
+//   * The scoreboard auto-compares every transfer at the 2-command pipeline
+//     offset: the word returned during transfer i is the result of command i-2.
+//
+// Directed coverage: ROM identity, reg-59 A/B marker, WRITE+readback, twoscomp
+// MSB-only flip, CALIBRATE 9-command ignore window (writes suppressed),
+// CONVERT(63) auto-increment, per-chip/module CONVERT data. A constrained-
+// random tail exercises additional command mixes.
+//
+// Run:  ./sim/run_sim.sh
 // ============================================================================
 
 `timescale 1ns/1ps
@@ -46,13 +55,109 @@ module tb_rhd2164;
     localparam real TSAMP      = 3.0;    // sample MISO this long before each edge
 
     // ---- scoreboard storage ----
-    localparam int N = 32;
-    reg [15:0] ret_a0 [0:N-1];
-    reg [15:0] ret_b0 [0:N-1];
-    reg [15:0] ret_a1 [0:N-1];
-    reg [15:0] ret_b1 [0:N-1];
+    localparam int N = 256;
+    reg [15:0] ret_a0 [0:N-1];   reg [15:0] ret_b0 [0:N-1];
+    reg [15:0] ret_a1 [0:N-1];   reg [15:0] ret_b1 [0:N-1];
+    reg [15:0] exp_a0 [0:N-1];   reg [15:0] exp_b0 [0:N-1];
+    reg [15:0] exp_a1 [0:N-1];   reg [15:0] exp_b1 [0:N-1];
     integer    errors = 0;
-    integer    idx    = 0;
+    integer    idx    = 0;       // next transfer slot
+
+    // ================================================================
+    // REFERENCE MODEL state (an independent re-implementation of the spec)
+    // ================================================================
+    reg [7:0] ref_ram [0:21];
+    reg [3:0] ref_calib;         // >0 => inside CALIBRATE dummy window
+    reg [4:0] ref_mux;           // CONVERT(63) auto-increment pointer
+    integer   ri;
+
+    // Channel "ADC" value matching the .mem patterns:
+    //   chip0 A=0x1000 B=0x2000 ; chip1 A=0x3000 B=0x4000 ; + channel index
+    function [15:0] chanval(input integer chip, input is_b, input [4:0] cidx);
+        begin
+            chanval = 16'h1000 + (chip * 16'h2000) + (is_b ? 16'h1000 : 16'h0000) + cidx;
+        end
+    endfunction
+
+    // Register read value, mirroring register_file.sv (A vs B stream).
+    function [7:0] ref_read(input [5:0] r, input is_b);
+        begin
+            if (r <= 6'd17)        ref_read = ref_ram[r];
+            else if (r <= 6'd21)   ref_read = is_b ? ref_ram[r] : 8'h00; // 18..21 B-only
+            else case (r)
+                6'd40:   ref_read = 8'h49;
+                6'd41:   ref_read = 8'h4E;
+                6'd42:   ref_read = 8'h54;
+                6'd43:   ref_read = 8'h41;
+                6'd44:   ref_read = 8'h4E;
+                6'd59:   ref_read = is_b ? 8'h3A : 8'h35;
+                6'd60:   ref_read = 8'h01;
+                6'd61:   ref_read = 8'h01;
+                6'd62:   ref_read = 8'h40;
+                6'd63:   ref_read = 8'h04;
+                default: ref_read = 8'h00;
+            endcase
+        end
+    endfunction
+
+    // Compute expected results for a command and advance reference state.
+    task automatic ref_step(input [15:0] cmd, input integer slot);
+        reg        ignored;
+        reg [15:0] msb_only;
+        reg [1:0]  op;
+        reg [5:0]  r_c;
+        reg [7:0]  d;
+        reg [4:0]  eff;
+        begin
+            ignored  = (ref_calib != 4'd0);
+            msb_only = {~ref_ram[4][6], 15'b0};   // ref_ram[4][6] = twoscomp
+            op       = cmd[15:14];
+            r_c      = cmd[13:8];
+            d        = cmd[7:0];
+            eff      = (r_c == 6'd63) ? ((ref_mux == 5'd31) ? 5'd0 : ref_mux + 5'd1)
+                                      : r_c[4:0];
+
+            if (ignored) begin
+                exp_a0[slot] = msb_only; exp_b0[slot] = msb_only;
+                exp_a1[slot] = msb_only; exp_b1[slot] = msb_only;
+            end else begin
+                case (op)
+                    2'b00: begin // CONVERT
+                        exp_a0[slot] = chanval(0, 1'b0, eff);
+                        exp_b0[slot] = chanval(0, 1'b1, eff);
+                        exp_a1[slot] = chanval(1, 1'b0, eff);
+                        exp_b1[slot] = chanval(1, 1'b1, eff);
+                    end
+                    2'b10: begin // WRITE echo
+                        exp_a0[slot] = {8'hFF, d}; exp_b0[slot] = {8'hFF, d};
+                        exp_a1[slot] = {8'hFF, d}; exp_b1[slot] = {8'hFF, d};
+                    end
+                    2'b11: begin // READ
+                        exp_a0[slot] = {8'h00, ref_read(r_c, 1'b0)};
+                        exp_b0[slot] = {8'h00, ref_read(r_c, 1'b1)};
+                        exp_a1[slot] = exp_a0[slot];
+                        exp_b1[slot] = exp_b0[slot];
+                    end
+                    default: begin // CALIBRATE / CLEAR / invalid
+                        exp_a0[slot] = msb_only; exp_b0[slot] = msb_only;
+                        exp_a1[slot] = msb_only; exp_b1[slot] = msb_only;
+                    end
+                endcase
+            end
+
+            // ---- state update ----
+            if (ignored) begin
+                ref_calib = ref_calib - 4'd1;
+            end else begin
+                if (op == 2'b00)
+                    ref_mux = (r_c == 6'd63) ? eff : r_c[4:0];
+                if (op == 2'b10 && r_c <= 6'd21)
+                    ref_ram[r_c] = d;
+                if (cmd == 16'h5500)
+                    ref_calib = 4'd9;
+            end
+        end
+    endtask
 
     // ------------------------------------------------------------------
     // One SPI transfer: send 16-bit cmd, capture A/B from both chips.
@@ -65,19 +170,16 @@ module tb_rhd2164;
             cs = 1'b0;
             #(TCS1);
             for (k = 0; k < 16; k = k + 1) begin
-                // Set up MOSI bit (MSB first) before the rising edge.
-                mosi = cmd[15 - k];
+                mosi = cmd[15 - k];              // MSB first, set up before rising
                 #2;
                 sclk = 1'b1;                     // rising edge R_(k+1)
                 #(TSCLK_HALF - TSAMP - 2);
-                // Sample A near the end of the HIGH phase (the falling-edge value).
-                a0 = {a0[14:0], miso0};
+                a0 = {a0[14:0], miso0};          // sample A in the HIGH phase
                 a1 = {a1[14:0], miso1};
                 #(TSAMP);
                 sclk = 1'b0;                     // falling edge F_(k+1)
                 #(TSCLK_HALF - TSAMP);
-                // Sample B near the end of the LOW phase (rising-edge / CS-rising value).
-                b0 = {b0[14:0], miso0};
+                b0 = {b0[14:0], miso0};          // sample B in the LOW phase
                 b1 = {b1[14:0], miso1};
                 #(TSAMP);
             end
@@ -90,90 +192,120 @@ module tb_rhd2164;
         end
     endtask
 
-    // ------------------------------------------------------------------
-    // Check helpers
-    // ------------------------------------------------------------------
-    task automatic chk(input [8*24-1:0] name, input [15:0] got, input [15:0] exp);
+    // Issue a command: model it, then drive it on the bus (slots stay aligned).
+    task automatic do_cmd(input [15:0] cmd);
         begin
-            if (got !== exp) begin
-                $display("  FAIL %0s: got %04h expected %04h", name, got, exp);
-                errors = errors + 1;
-            end else begin
-                $display("  ok   %0s: %04h", name, got);
-            end
+            ref_step(cmd, idx);
+            spi_xfer(cmd);
         end
     endtask
 
     // ------------------------------------------------------------------
+    // Command builders (encodings straight from the datasheet)
+    // ------------------------------------------------------------------
+    function [15:0] CONVERT(input [5:0] c); CONVERT = {2'b00, c, 8'h00};      endfunction
+    function [15:0] READ   (input [5:0] r); READ    = {2'b11, r, 8'h00};      endfunction
+    function [15:0] WRITE  (input [5:0] r, input [7:0] d); WRITE = {2'b10, r, d}; endfunction
+    localparam [15:0] CALIBRATE = 16'h5500;
+    localparam [15:0] CLEARCAL  = 16'h6A00;
+    localparam [15:0] INVALID   = 16'h4000;   // 01.. but not CALIBRATE/CLEAR
+
+    // ------------------------------------------------------------------
     // Stimulus
     // ------------------------------------------------------------------
+    integer i, rseed, rop, rnd;
+    reg [15:0] rcmd;
+
     initial begin
         $dumpfile("sim/tb_rhd2164.vcd");
         $dumpvars(0, tb_rhd2164);
+
+        // init reference state to match DUT reset
+        for (ri = 0; ri < 22; ri = ri + 1) ref_ram[ri] = 8'h00;
+        ref_calib = 4'd0;
+        ref_mux   = 5'd0;
+        rseed     = 32'hC0FFEE01;
 
         // Reset
         repeat (10) @(posedge clk);
         rst_n = 1'b1;
         repeat (10) @(posedge clk);
 
-        // idx: command            (result appears 2 transfers later)
-        spi_xfer(16'hFF00);   // 0  READ(63)         -> chipID
-        spi_xfer(16'hFF00);   // 1  READ(63)
-        spi_xfer(16'hE800);   // 2  READ(40) 'I'     ; returns res(0)=READ63=0x0004
-        spi_xfer(16'hFB00);   // 3  READ(59) marker  ; returns res(1)=0x0004
-        spi_xfer(16'hFE00);   // 4  READ(62) nAmps   ; returns res(2)=READ40=0x0049
-        spi_xfer(16'h0000);   // 5  CONVERT(0)       ; returns res(3)=READ59 A=0x35 B=0x3A
-        spi_xfer(16'h0100);   // 6  CONVERT(1)       ; returns res(4)=READ62=0x0040
-        spi_xfer(16'h8816);   // 7  WRITE(8,0x16)    ; returns res(5)=CONVERT0 (BRAM ch0)
-        spi_xfer(16'h1F00);   // 8  CONVERT(31)      ; returns res(6)=CONVERT1 (BRAM ch1)
-        spi_xfer(16'h4000);   // 9  invalid (01..)   ; returns res(7)=WRITE echo 0xFF16
-        spi_xfer(16'hFF00);   // 10 READ(63)         ; returns res(8)=CONVERT31 (BRAM ch31)
-        spi_xfer(16'hFF00);   // 11 READ(63)         ; returns res(9)=invalid MSB-only 0x8000
-        spi_xfer(16'hFF00);   // 12 READ(63)         ; returns res(10)=READ63=0x0004
-        spi_xfer(16'hFF00);   // 13 READ(63)         ; returns res(11)=READ63=0x0004
+        // ---- directed: dummy + full ROM sweep ----
+        do_cmd(READ(63)); do_cmd(READ(63));          // power-up dummies
+        do_cmd(READ(40)); do_cmd(READ(41)); do_cmd(READ(42));
+        do_cmd(READ(43)); do_cmd(READ(44));          // INTAN
+        do_cmd(READ(59));                            // A/B marker
+        do_cmd(READ(60)); do_cmd(READ(61));
+        do_cmd(READ(62)); do_cmd(READ(63));          // nAmps, chipID
+
+        // ---- directed: RAM write + readback ----
+        do_cmd(WRITE(8, 8'h16)); do_cmd(READ(8));    // bandwidth reg echoes + reads back
+
+        // ---- directed: twoscomp flip (Register 4 bit 6) ----
+        do_cmd(INVALID);                             // MSB-only, twoscomp=0 -> 0x8000
+        do_cmd(WRITE(4, 8'h40));                     // set twoscomp=1
+        do_cmd(READ(4));                             // confirm 0x40 stored
+        do_cmd(INVALID);                             // MSB-only, twoscomp=1 -> 0x0000
+
+        // ---- directed: CONVERT data + CONVERT(63) auto-increment ----
+        do_cmd(CONVERT(0));                          // seed MUX pointer = 0
+        do_cmd(CONVERT(5));
+        do_cmd(CONVERT(31));
+        do_cmd(CONVERT(0));                          // reseed pointer to 0
+        do_cmd(CONVERT(63));                         // -> channel 1
+        do_cmd(CONVERT(63));                         // -> channel 2
+        do_cmd(CONVERT(63));                         // -> channel 3
+
+        // ---- directed: CALIBRATE 9-command ignore window ----
+        do_cmd(CALIBRATE);                           // arms 9-command window
+        do_cmd(WRITE(2, 8'h3F));                     // ignored #1 (must NOT execute)
+        do_cmd(READ(63)); do_cmd(READ(63)); do_cmd(READ(63)); do_cmd(READ(63));
+        do_cmd(READ(63)); do_cmd(READ(63)); do_cmd(READ(63)); do_cmd(READ(63)); // ignored #2..9
+        do_cmd(READ(2));                             // executes: should read 0x00 (write ignored)
+
+        // ---- constrained-random tail ----
+        // ($random returns SIGNED 32-bit; mask to stay non-negative before %.)
+        for (i = 0; i < 40; i = i + 1) begin
+            rop = ($random(rseed) & 32'h7FFF_FFFF) % 4;
+            rnd = ($random(rseed) & 32'h7FFF_FFFF);
+            case (rop)
+                0: rcmd = CONVERT(rnd % 32);
+                1: rcmd = READ(rnd % 24);                       // mix of RAM + a few ROM regs
+                2: rcmd = WRITE(rnd % 22, ($random(rseed) & 32'h0000_00FF));
+                default: rcmd = ((rnd % 8) == 0) ? INVALID : CONVERT(rnd % 32);
+            endcase
+            do_cmd(rcmd);
+        end
+
+        // ---- flush the 2-command pipeline ----
+        do_cmd(READ(63)); do_cmd(READ(63));
 
         // --------------------------------------------------------------
-        // Verify (chip0 unless noted). ret[i] = result of command (i-2).
+        // Scoreboard: ret[i] must equal exp[i-2] on all four streams.
         // --------------------------------------------------------------
-        $display("\n=== RHD2164 emulator checks ===");
+        $display("\n=== RHD2164 reference-model scoreboard (%0d transfers) ===", idx);
+        for (i = 2; i < idx; i = i + 1) begin
+            if (ret_a0[i] !== exp_a0[i-2]) begin errors=errors+1;
+                $display("  FAIL t%0d chip0.A got %04h exp %04h", i, ret_a0[i], exp_a0[i-2]); end
+            if (ret_b0[i] !== exp_b0[i-2]) begin errors=errors+1;
+                $display("  FAIL t%0d chip0.B got %04h exp %04h", i, ret_b0[i], exp_b0[i-2]); end
+            if (ret_a1[i] !== exp_a1[i-2]) begin errors=errors+1;
+                $display("  FAIL t%0d chip1.A got %04h exp %04h", i, ret_a1[i], exp_a1[i-2]); end
+            if (ret_b1[i] !== exp_b1[i-2]) begin errors=errors+1;
+                $display("  FAIL t%0d chip1.B got %04h exp %04h", i, ret_b1[i], exp_b1[i-2]); end
+        end
 
-        // ROM: chip ID = 4 (reg 63)
-        chk("READ63 chipID A", ret_a0[2], 16'h0004);
-        chk("READ63 chipID B", ret_b0[2], 16'h0004);
+        // --------------------------------------------------------------
+        // A few named milestone prints for human readability.
+        // --------------------------------------------------------------
+        $display("\n=== Milestones ===");
+        $display("  chipID (reg63)      A=%04h  (exp 0004)", ret_a0[2]);   // res of READ(63) #0
+        $display("  reg59 A/B marker    A=%04h B=%04h  (exp 0035/003A)", ret_a0[9], ret_b0[9]);
+        $display("  twoscomp=0 MSB-only %04h  (exp 8000)", ret_a0[16]);    // INVALID #1
+        $display("  twoscomp=1 MSB-only %04h  (exp 0000)", ret_a0[19]);    // INVALID #2
 
-        // ROM: 'I' of INTAN (reg 40)
-        chk("READ40 'I'   A", ret_a0[4], 16'h0049);
-
-        // A/B MARKER (reg 59): A=0x35, B=0x3A  -- proves DDR A/B separation
-        chk("READ59 marker A", ret_a0[5], 16'h0035);
-        chk("READ59 marker B", ret_b0[5], 16'h003A);
-
-        // ROM: number of amps = 64 (reg 62)
-        chk("READ62 nAmps A", ret_a0[6], 16'h0040);
-
-        // CONVERT(0): chip0 A=0x1000 B=0x2000 ; chip1 A=0x3000 B=0x4000
-        chk("CONV0 chip0 A", ret_a0[7], 16'h1000);
-        chk("CONV0 chip0 B", ret_b0[7], 16'h2000);
-        chk("CONV0 chip1 A", ret_a1[7], 16'h3000);
-        chk("CONV0 chip1 B", ret_b1[7], 16'h4000);
-
-        // CONVERT(1): channel index 1
-        chk("CONV1 chip0 A", ret_a0[8], 16'h1001);
-        chk("CONV1 chip0 B", ret_b0[8], 16'h2001);
-
-        // WRITE(8,0x16) echo = {0xFF, data}
-        chk("WRITE echo   A", ret_a0[9], 16'hFF16);
-
-        // CONVERT(31): channel index 31
-        chk("CONV31 chip0 A", ret_a0[10], 16'h101F);
-        chk("CONV31 chip0 B", ret_b0[10], 16'h201F);
-        chk("CONV31 chip1 A", ret_a1[10], 16'h301F);
-        chk("CONV31 chip1 B", ret_b1[10], 16'h401F);
-
-        // invalid command -> MSB-only result (twoscomp=0 => 0x8000)
-        chk("invalid MSBonly", ret_a0[11], 16'h8000);
-
-        $display("\n=== %0d error(s) ===", errors);
+        $display("\n=== %0d error(s) over %0d checked transfers ===", errors, idx-2);
         if (errors == 0) $display("ALL CHECKS PASSED");
         else             $display("THERE WERE FAILURES");
         $finish;
@@ -181,7 +313,7 @@ module tb_rhd2164;
 
     // Safety timeout
     initial begin
-        #500000;
+        #2000000;
         $display("TIMEOUT");
         $finish;
     end
