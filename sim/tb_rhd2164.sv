@@ -117,14 +117,9 @@ module tb_rhd2164;
         repeat (10) @(posedge clk);
 
         // idx: command            (result appears 2 transfers later)
-        spi_xfer(16'hC000);   // 0  READ(0x00)? no -> READ(63): 11_111111_00000000
-        // Correct READ(63) encoding: 11 + 111111 + 00000000 = 1111_1100_0000_0000 = 0xFC00
-        // (the line above used a placeholder; real sequence below)
-        // --- restart cleanly ---
-        idx = 0;
-        spi_xfer(16'hFC00);   // 0  READ(63)         -> chipID
-        spi_xfer(16'hFC00);   // 1  READ(63)
-        spi_xfer(16'hFA00);   // 2  READ(40) 'I'     ; returns res(0)=READ63=0x0004
+        spi_xfer(16'hFF00);   // 0  READ(63)         -> chipID
+        spi_xfer(16'hFF00);   // 1  READ(63)
+        spi_xfer(16'hE800);   // 2  READ(40) 'I'     ; returns res(0)=READ63=0x0004
         spi_xfer(16'hFB00);   // 3  READ(59) marker  ; returns res(1)=0x0004
         spi_xfer(16'hFE00);   // 4  READ(62) nAmps   ; returns res(2)=READ40=0x0049
         spi_xfer(16'h0000);   // 5  CONVERT(0)       ; returns res(3)=READ59 A=0x35 B=0x3A
@@ -132,10 +127,10 @@ module tb_rhd2164;
         spi_xfer(16'h8816);   // 7  WRITE(8,0x16)    ; returns res(5)=CONVERT0 (BRAM ch0)
         spi_xfer(16'h1F00);   // 8  CONVERT(31)      ; returns res(6)=CONVERT1 (BRAM ch1)
         spi_xfer(16'h4000);   // 9  invalid (01..)   ; returns res(7)=WRITE echo 0xFF16
-        spi_xfer(16'hFC00);   // 10 READ(63)         ; returns res(8)=CONVERT31 (BRAM ch31)
-        spi_xfer(16'hFC00);   // 11 READ(63)         ; returns res(9)=invalid MSB-only 0x8000
-        spi_xfer(16'hFC00);   // 12 READ(63)         ; returns res(10)=READ63=0x0004
-        spi_xfer(16'hFC00);   // 13 READ(63)         ; returns res(11)=READ63=0x0004
+        spi_xfer(16'hFF00);   // 10 READ(63)         ; returns res(8)=CONVERT31 (BRAM ch31)
+        spi_xfer(16'hFF00);   // 11 READ(63)         ; returns res(9)=invalid MSB-only 0x8000
+        spi_xfer(16'hFF00);   // 12 READ(63)         ; returns res(10)=READ63=0x0004
+        spi_xfer(16'hFF00);   // 13 READ(63)         ; returns res(11)=READ63=0x0004
 
         // --------------------------------------------------------------
         // Verify (chip0 unless noted). ret[i] = result of command (i-2).
