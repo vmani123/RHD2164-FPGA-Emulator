@@ -13,7 +13,9 @@
       "Bash(git commit -q -m 'Add RHD2164 emulator testbench *)",
       "Bash(git commit -q -m 'Update local settings allowlist *)",
       "Bash(vvp sim/tb.vvp)",
-      "Bash(git commit -q -m 'Add line-by-line code reading guide \\(docs/WALKTHROUGH.md\\) *)"
+      "Bash(git commit -q -m 'Add line-by-line code reading guide \\(docs/WALKTHROUGH.md\\) *)",
+      "Bash(gh auth *)",
+      "Bash(git commit -q -m 'Add functional coverage to testbench \\(manual bins\\) *)"
     ]
   }
 }

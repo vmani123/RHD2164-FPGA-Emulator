@@ -64,6 +64,20 @@ module tb_rhd2164;
     integer    idx    = 0;       // next transfer slot
 
     // ================================================================
+    // FUNCTIONAL COVERAGE (manual — iverilog has no covergroups).
+    // Each bin records "did the stimulus exercise this case at least once".
+    // ================================================================
+    reg     cov_op       [0:5];   // CONVERT, CALIBRATE, CLEAR, WRITE, READ, invalid
+    reg     cov_conv_ch  [0:31];  // each amplifier channel converted
+    reg     cov_wr_reg   [0:21];  // each RAM register written
+    reg     cov_rd_reg   [0:63];  // each register read (RAM + ROM)
+    reg     cov_twoscomp [0:1];   // MSB-only result seen under twoscomp=0 and =1
+    integer cov_calib  = 0;       // times the CALIBRATE window was armed
+    integer cov_conv63 = 0;       // times CONVERT(63) auto-increment used
+    integer ci, hit, tot;
+    reg [8*10-1:0] opname [0:5];
+
+    // ================================================================
     // REFERENCE MODEL state (an independent re-implementation of the spec)
     // ================================================================
     reg [7:0] ref_ram [0:21];
@@ -192,9 +206,39 @@ module tb_rhd2164;
         end
     endtask
 
-    // Issue a command: model it, then drive it on the bus (slots stay aligned).
+    // Sample functional coverage for a command (uses reference twoscomp state).
+    task automatic cover_cmd(input [15:0] cmd);
+        reg [1:0] op; reg [5:0] rc;
+        begin
+            op = cmd[15:14]; rc = cmd[13:8];
+            case (op)
+                2'b00: begin                              // CONVERT
+                    cov_op[0] = 1'b1;
+                    if (rc == 6'd63) cov_conv63 = cov_conv63 + 1;
+                    else             cov_conv_ch[rc[4:0]] = 1'b1;
+                end
+                2'b01: begin                              // calibration family
+                    if      (cmd == 16'h5500) begin cov_op[1] = 1'b1; cov_calib = cov_calib + 1; end
+                    else if (cmd == 16'h6A00)        cov_op[2] = 1'b1;       // CLEAR
+                    else                             cov_op[5] = 1'b1;       // invalid
+                    cov_twoscomp[ref_ram[4][6]] = 1'b1;   // twoscomp at this moment
+                end
+                2'b10: begin                              // WRITE
+                    cov_op[3] = 1'b1;
+                    if (rc <= 6'd21) cov_wr_reg[rc] = 1'b1;
+                end
+                2'b11: begin                              // READ
+                    cov_op[4] = 1'b1;
+                    cov_rd_reg[rc] = 1'b1;
+                end
+            endcase
+        end
+    endtask
+
+    // Issue a command: cover it, model it, then drive it on the bus.
     task automatic do_cmd(input [15:0] cmd);
         begin
+            cover_cmd(cmd);
             ref_step(cmd, idx);
             spi_xfer(cmd);
         end
@@ -225,6 +269,15 @@ module tb_rhd2164;
         ref_calib = 4'd0;
         ref_mux   = 5'd0;
         rseed     = 32'hC0FFEE01;
+
+        // init coverage bins
+        for (ci = 0; ci < 6;  ci = ci + 1) cov_op[ci]       = 1'b0;
+        for (ci = 0; ci < 32; ci = ci + 1) cov_conv_ch[ci]  = 1'b0;
+        for (ci = 0; ci < 22; ci = ci + 1) cov_wr_reg[ci]   = 1'b0;
+        for (ci = 0; ci < 64; ci = ci + 1) cov_rd_reg[ci]   = 1'b0;
+        cov_twoscomp[0] = 1'b0; cov_twoscomp[1] = 1'b0;
+        opname[0]="CONVERT"; opname[1]="CALIBRATE"; opname[2]="CLEAR";
+        opname[3]="WRITE";   opname[4]="READ";      opname[5]="invalid";
 
         // Reset
         repeat (10) @(posedge clk);
@@ -263,6 +316,14 @@ module tb_rhd2164;
         do_cmd(READ(63)); do_cmd(READ(63)); do_cmd(READ(63)); do_cmd(READ(63));
         do_cmd(READ(63)); do_cmd(READ(63)); do_cmd(READ(63)); do_cmd(READ(63)); // ignored #2..9
         do_cmd(READ(2));                             // executes: should read 0x00 (write ignored)
+
+        // ---- CLEAR command (covers the CLEAR opcode) ----
+        do_cmd(CLEARCAL);
+
+        // ---- coverage closure: sweep every channel and every RAM register ----
+        for (i = 0; i < 32; i = i + 1) do_cmd(CONVERT(i[5:0]));        // all 32 channels
+        for (i = 0; i < 22; i = i + 1) do_cmd(WRITE(i[5:0], 8'h80 + i[7:0])); // all 22 writes
+        for (i = 0; i < 22; i = i + 1) do_cmd(READ(i[5:0]));          // read them back
 
         // ---- constrained-random tail ----
         // ($random returns SIGNED 32-bit; mask to stay non-negative before %.)
@@ -304,6 +365,41 @@ module tb_rhd2164;
         $display("  reg59 A/B marker    A=%04h B=%04h  (exp 0035/003A)", ret_a0[9], ret_b0[9]);
         $display("  twoscomp=0 MSB-only %04h  (exp 8000)", ret_a0[16]);    // INVALID #1
         $display("  twoscomp=1 MSB-only %04h  (exp 0000)", ret_a0[19]);    // INVALID #2
+
+        // --------------------------------------------------------------
+        // Functional coverage report.
+        // --------------------------------------------------------------
+        $display("\n=== Functional coverage ===");
+
+        // Command opcodes
+        hit = 0;
+        for (ci = 0; ci < 6; ci = ci + 1) begin
+            if (cov_op[ci]) hit = hit + 1;
+            else $display("  MISS opcode: %0s", opname[ci]);
+        end
+        $display("  opcodes        : %0d/6 hit", hit);
+
+        // CONVERT channels
+        hit = 0;
+        for (ci = 0; ci < 32; ci = ci + 1) if (cov_conv_ch[ci]) hit = hit + 1;
+        $display("  CONVERT channels: %0d/32 hit", hit);
+
+        // RAM register writes
+        hit = 0;
+        for (ci = 0; ci < 22; ci = ci + 1) if (cov_wr_reg[ci]) hit = hit + 1;
+        $display("  RAM reg writes  : %0d/22 hit", hit);
+
+        // Register reads: RAM (0..21) + the meaningful ROM regs
+        hit = 0; tot = 0;
+        for (ci = 0; ci < 22; ci = ci + 1) begin tot=tot+1; if (cov_rd_reg[ci]) hit=hit+1; end
+        for (ci = 40; ci <= 44; ci = ci + 1) begin tot=tot+1; if (cov_rd_reg[ci]) hit=hit+1; end
+        for (ci = 59; ci <= 63; ci = ci + 1) begin tot=tot+1; if (cov_rd_reg[ci]) hit=hit+1; end
+        $display("  register reads  : %0d/%0d hit", hit, tot);
+
+        // twoscomp states, CALIBRATE, CONVERT(63)
+        $display("  twoscomp states : %0d/2 hit", (cov_twoscomp[0]?1:0)+(cov_twoscomp[1]?1:0));
+        $display("  CALIBRATE window: armed %0d time(s)", cov_calib);
+        $display("  CONVERT(63) used: %0d time(s)", cov_conv63);
 
         $display("\n=== %0d error(s) over %0d checked transfers ===", errors, idx-2);
         if (errors == 0) $display("ALL CHECKS PASSED");
