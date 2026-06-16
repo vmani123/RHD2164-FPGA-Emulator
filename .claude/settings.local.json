@@ -15,7 +15,11 @@
       "Bash(vvp sim/tb.vvp)",
       "Bash(git commit -q -m 'Add line-by-line code reading guide \\(docs/WALKTHROUGH.md\\) *)",
       "Bash(gh auth *)",
-      "Bash(git commit -q -m 'Add functional coverage to testbench \\(manual bins\\) *)"
+      "Bash(git commit -q -m 'Add functional coverage to testbench \\(manual bins\\) *)",
+      "Bash(mkdir -p .github/workflows)",
+      "Bash(./sim/run_sim.sh)",
+      "Bash(echo \"run_sim.sh exit code on PASS = $?\")",
+      "Bash(git commit -q -m 'Add CI workflow, README, and fail-on-error sim script *)"
     ]
   }
 }
