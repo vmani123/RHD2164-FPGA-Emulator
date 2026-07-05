@@ -36,7 +36,8 @@
       "Bash(./.venv/bin/python host_tools/gen_neural_mem.py --mode neural --seconds 0.3 --spatial-corr 0.7 --seed 7)",
       "Bash(git checkout *)",
       "Bash(./.venv/bin/python host_tools/gen_neural_mem.py --mode neural --seconds 1.0 --spatial-corr 0.7 --seed 7)",
-      "Bash(git commit -q -m 'Stage 2+3: time-varying playback \\(gen_neural_mem.py + minimal RTL\\) *)"
+      "Bash(git commit -q -m 'Stage 2+3: time-varying playback \\(gen_neural_mem.py + minimal RTL\\) *)",
+      "Bash(git commit -q -m 'Stage 3: emu_verify.py time-varying + hardware-free selftest *)"
     ]
   }
 }
