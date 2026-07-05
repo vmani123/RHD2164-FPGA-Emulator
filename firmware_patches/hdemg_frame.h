@@ -21,8 +21,22 @@
 #define HDEMG_MAGIC        0xA55Au
 
 /* payload type */
-#define HDEMG_TYPE_RAW16   0u   /* int16 per channel, one sample period           */
-#define HDEMG_TYPE_RMS16   1u   /* int16 RMS per channel, one decimation window    */
+#define HDEMG_TYPE_RAW16      0u /* int16 per channel, one sample period           */
+#define HDEMG_TYPE_RMS16      1u /* int16 RMS per channel, one decimation window    */
+#define HDEMG_TYPE_COMPRESSED 2u /* lossless-compressed block (see layout below)    */
+
+/*
+ * COMPRESSED frame layout (type = HDEMG_TYPE_COMPRESSED):
+ *   hdemg_hdr_t header    (n_ch = channels in the block, seq = block index)
+ *   uint32_t    blob_len
+ *   uint8_t     blob[blob_len]   -- output of the reference embedded codec
+ *                                   (host_tools/embedded_codec.py encode()),
+ *                                   self-describing: predictor, cross-channel
+ *                                   flag, grid cols, channels C, samples N.
+ * The block covers N sample periods for all n_ch channels; verify_compressed.py
+ * decodes it and asserts bit-exact equality with ground_truth[:, seq*N:(seq+1)*N].
+ * RAW16 / RMS16 framing is unchanged (payload = n_ch * int16).
+ */
 
 /* chip_id */
 #define HDEMG_CHIP_0       0u

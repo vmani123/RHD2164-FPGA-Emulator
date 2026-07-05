@@ -47,7 +47,9 @@
       "Bash(PYTHONPATH=host_tools ./.venv/bin/python host_tools/bench_lossless.py --gt sim_data/ground_truth.npy --cols 16 --bench-samples 15000)",
       "Bash(PYTHONPATH=host_tools ./.venv/bin/python host_tools/bench_lossless.py --sweep spatial-corr --values 0,0.9 --csv sim_data/sweep.csv --bench-samples 8000)",
       "Bash(rm -f sim_data/sweep.csv)",
-      "Bash(git commit -q -m 'Stage 4: lossless benchmark + embedded codecs \\(bit-exact, beats refs\\) *)"
+      "Bash(git commit -q -m 'Stage 4: lossless benchmark + embedded codecs \\(bit-exact, beats refs\\) *)",
+      "Bash(PYTHONPATH=host_tools ./.venv/bin/python host_tools/verify_compressed.py --selftest --gt sim_data/ground_truth.npy --max-samples 8000)",
+      "Bash(git commit -q -m 'Stage 5: compressed-path verifier + COMPRESSED frame type *)"
     ]
   }
 }
