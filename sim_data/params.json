@@ -1,0 +1,19 @@
+{
+  "mode": "neural",
+  "channels": 128,
+  "seconds": 1.0,
+  "fs": 30000.0,
+  "firing_rate_hz": 50.0,
+  "noise_rms": 12.0,
+  "spike_amp": 350.0,
+  "spatial_corr": 0.7,
+  "prop_velocity": 0.0,
+  "grid": "8x16",
+  "seed": 7,
+  "mem_samples": 256,
+  "n_samples": 30000,
+  "mem_segment_samples": 256,
+  "mem_words_per_file": 8192,
+  "est_bram36k_used": 16,
+  "bram36k_available_xc7s25": 45
+}

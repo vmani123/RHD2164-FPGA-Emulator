@@ -19,7 +19,24 @@
       "Bash(mkdir -p .github/workflows)",
       "Bash(./sim/run_sim.sh)",
       "Bash(echo \"run_sim.sh exit code on PASS = $?\")",
-      "Bash(git commit -q -m 'Add CI workflow, README, and fail-on-error sim script *)"
+      "Bash(git commit -q -m 'Add CI workflow, README, and fail-on-error sim script *)",
+      "Read(//Users/th3vik/.ssh/**)",
+      "Bash(git config *)",
+      "Bash(cd \"/Users/th3vik/Documents/Claude/Projects/Intan Processing Project/HDEMG_Toolkit\" 2>/dev/null && echo \"=== tree \\(depth 3\\) ===\" && find . -maxdepth 3 -not -path '*/.*' | head -80 || echo \"PATH NOT FOUND\")",
+      "Bash(mkdir -p host_tools firmware_patches sim_data)",
+      "Bash(cp __TRACKED_VAR__/host_tools/emu_verify.py __TRACKED_VAR__/host_tools/pc_receiver.py __TRACKED_VAR__/host_tools/selftest.py host_tools/)",
+      "Bash(cp __TRACKED_VAR__/firmware_patches/hdemg_frame.h firmware_patches/)",
+      "Bash(python3 -)",
+      "Bash(python3 -m venv .venv)",
+      "Bash(./.venv/bin/pip install *)",
+      "Bash(./.venv/bin/python -c 'import numpy;print\\(numpy.__version__\\)')",
+      "Bash(echo \"numpy: $\\(./.venv/bin/python -c 'import numpy;print\\(numpy.__version__\\)'\\)\")",
+      "Bash(./.venv/bin/python -c \"import numpy,mtscomp,zstandard,lzma,gzip,zlib; print\\('py codecs OK:', numpy.__version__\\)\")",
+      "Bash(./.venv/bin/python host_tools/gen_neural_mem.py --mode simple --seconds 0.2 --seed 1)",
+      "Bash(./.venv/bin/python host_tools/gen_neural_mem.py --mode neural --seconds 0.3 --spatial-corr 0.7 --seed 7)",
+      "Bash(git checkout *)",
+      "Bash(./.venv/bin/python host_tools/gen_neural_mem.py --mode neural --seconds 1.0 --spatial-corr 0.7 --seed 7)",
+      "Bash(git commit -q -m 'Stage 2+3: time-varying playback \\(gen_neural_mem.py + minimal RTL\\) *)"
     ]
   }
 }

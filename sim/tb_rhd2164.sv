@@ -85,11 +85,23 @@ module tb_rhd2164;
     reg [4:0] ref_mux;           // CONVERT(63) auto-increment pointer
     integer   ri;
 
-    // Channel "ADC" value matching the .mem patterns:
-    //   chip0 A=0x1000 B=0x2000 ; chip1 A=0x3000 B=0x4000 ; + channel index
-    function [15:0] chanval(input integer chip, input is_b, input [4:0] cidx);
+    // ---- time-varying channel data: load the SAME .mem files the DUT plays ----
+    localparam integer MEM_SAMPLES = 256;             // must match DUT parameter
+    localparam integer DEPTH       = MEM_SAMPLES * 32;
+    reg [15:0] mem_c0a [0:DEPTH-1];  reg [15:0] mem_c0b [0:DEPTH-1];
+    reg [15:0] mem_c1a [0:DEPTH-1];  reg [15:0] mem_c1b [0:DEPTH-1];
+    reg [$clog2(MEM_SAMPLES)-1:0] ref_sample_ptr;     // mirrors DUT sample_ptr
+
+    // Expected CONVERT value = mem[sample_ptr*32 + channel], per chip/module.
+    function [15:0] chanval(input integer chip, input is_b, input [4:0] cidx,
+                            input integer sptr);
+        integer a;
         begin
-            chanval = 16'h1000 + (chip * 16'h2000) + (is_b ? 16'h1000 : 16'h0000) + cidx;
+            a = sptr * 32 + cidx;
+            if      (chip == 0 && !is_b) chanval = mem_c0a[a];
+            else if (chip == 0 &&  is_b) chanval = mem_c0b[a];
+            else if (chip == 1 && !is_b) chanval = mem_c1a[a];
+            else                         chanval = mem_c1b[a];
         end
     endfunction
 
@@ -131,16 +143,22 @@ module tb_rhd2164;
             eff      = (r_c == 6'd63) ? ((ref_mux == 5'd31) ? 5'd0 : ref_mux + 5'd1)
                                       : r_c[4:0];
 
+            // Sample pointer advances on every CONVERT(0) (raw channel field 0),
+            // unconditionally -- mirrors the DUT top, which acts on the command
+            // stream regardless of the CALIBRATE ignore window.
+            if (op == 2'b00 && r_c == 6'd0)
+                ref_sample_ptr = (ref_sample_ptr == MEM_SAMPLES-1) ? 0 : ref_sample_ptr + 1;
+
             if (ignored) begin
                 exp_a0[slot] = msb_only; exp_b0[slot] = msb_only;
                 exp_a1[slot] = msb_only; exp_b1[slot] = msb_only;
             end else begin
                 case (op)
                     2'b00: begin // CONVERT
-                        exp_a0[slot] = chanval(0, 1'b0, eff);
-                        exp_b0[slot] = chanval(0, 1'b1, eff);
-                        exp_a1[slot] = chanval(1, 1'b0, eff);
-                        exp_b1[slot] = chanval(1, 1'b1, eff);
+                        exp_a0[slot] = chanval(0, 1'b0, eff, ref_sample_ptr);
+                        exp_b0[slot] = chanval(0, 1'b1, eff, ref_sample_ptr);
+                        exp_a1[slot] = chanval(1, 1'b0, eff, ref_sample_ptr);
+                        exp_b1[slot] = chanval(1, 1'b1, eff, ref_sample_ptr);
                     end
                     2'b10: begin // WRITE echo
                         exp_a0[slot] = {8'hFF, d}; exp_b0[slot] = {8'hFF, d};
@@ -269,6 +287,14 @@ module tb_rhd2164;
         ref_calib = 4'd0;
         ref_mux   = 5'd0;
         rseed     = 32'hC0FFEE01;
+
+        // load the same channel data the DUT plays; mirror the sample pointer
+        // (DUT resets sample_ptr to MEM_SAMPLES-1 so the first CONVERT(0) -> 0).
+        $readmemh("mem/chip0_A.mem", mem_c0a);
+        $readmemh("mem/chip0_B.mem", mem_c0b);
+        $readmemh("mem/chip1_A.mem", mem_c1a);
+        $readmemh("mem/chip1_B.mem", mem_c1b);
+        ref_sample_ptr = MEM_SAMPLES - 1;
 
         // init coverage bins
         for (ci = 0; ci < 6;  ci = ci + 1) cov_op[ci]       = 1'b0;
