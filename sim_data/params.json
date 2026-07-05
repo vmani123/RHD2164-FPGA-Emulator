@@ -6,7 +6,7 @@
   "firing_rate_hz": 50.0,
   "noise_rms": 12.0,
   "spike_amp": 350.0,
-  "spatial_corr": 0.7,
+  "spatial_corr": 0.6,
   "prop_velocity": 0.0,
   "grid": "8x16",
   "seed": 7,

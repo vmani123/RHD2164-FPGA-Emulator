@@ -37,7 +37,17 @@
       "Bash(git checkout *)",
       "Bash(./.venv/bin/python host_tools/gen_neural_mem.py --mode neural --seconds 1.0 --spatial-corr 0.7 --seed 7)",
       "Bash(git commit -q -m 'Stage 2+3: time-varying playback \\(gen_neural_mem.py + minimal RTL\\) *)",
-      "Bash(git commit -q -m 'Stage 3: emu_verify.py time-varying + hardware-free selftest *)"
+      "Bash(git commit -q -m 'Stage 3: emu_verify.py time-varying + hardware-free selftest *)",
+      "Bash(time ./.venv/bin/python host_tools/embedded_codec.py)",
+      "Bash(PYTHONPATH=host_tools time ./.venv/bin/python host_tools/bench_lossless.py --gt sim_data/ground_truth.npy --cols 16 --bench-samples 15000)",
+      "Bash(PYTHONPATH=host_tools ./.venv/bin/python -)",
+      "Bash(./.venv/bin/python -)",
+      "Bash(./.venv/bin/python host_tools/embedded_codec.py)",
+      "Bash(./.venv/bin/python host_tools/gen_neural_mem.py --mode neural --seconds 1.0 --spatial-corr 0.6 --seed 7)",
+      "Bash(PYTHONPATH=host_tools ./.venv/bin/python host_tools/bench_lossless.py --gt sim_data/ground_truth.npy --cols 16 --bench-samples 15000)",
+      "Bash(PYTHONPATH=host_tools ./.venv/bin/python host_tools/bench_lossless.py --sweep spatial-corr --values 0,0.9 --csv sim_data/sweep.csv --bench-samples 8000)",
+      "Bash(rm -f sim_data/sweep.csv)",
+      "Bash(git commit -q -m 'Stage 4: lossless benchmark + embedded codecs \\(bit-exact, beats refs\\) *)"
     ]
   }
 }

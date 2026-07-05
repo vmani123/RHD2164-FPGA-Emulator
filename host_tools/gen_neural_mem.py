@@ -146,6 +146,24 @@ def gen_neural(channels, n, fs, rng, grid, noise_rms, firing_rate_hz,
             seg = tmpl[: max(0, min(L, n - s))]
             sig[ch, s:s + seg.size] += amp * gain[ch] * seg
 
+    # 3) shared spatially-correlated field: dense BROADBAND common-mode that
+    #    appears on physically-neighbouring channels at once. It is temporally
+    #    white (so a per-channel temporal predictor like FLAC/LMS cannot remove
+    #    it) but spatially shared -- exactly what a cross-channel predictor (or
+    #    common-average reference) removes losslessly. This, not an LFP, is the
+    #    honest lever for beating per-channel codecs; its strength scales with
+    #    --spatial-corr (0 => none). The independent noise floor in (1) still
+    #    caps the achievable ratio.
+    n_field = 5
+    field_amp = spatial_corr * 2.5 * noise_rms          # exceeds noise core at high corr
+    broad_sigma = 2.0 + 4.0 * spatial_corr              # broad spatial spread
+    for _ in range(n_field):
+        common = rng.normal(0.0, field_amp, n)          # broadband (temporally white)
+        r0, c0 = rng.uniform(0, rows - 1), rng.uniform(0, cols - 1)
+        d = np.hypot(gr - r0, gc - c0)
+        spatial = np.exp(-(d ** 2) / (2 * broad_sigma ** 2))
+        sig += spatial[:, None] * common[None, :]
+
     return sig
 
 
