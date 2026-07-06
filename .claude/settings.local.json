@@ -1,4 +1,17 @@
 {
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR/.claude/hooks/verify_codec.py\""
+          }
+        ]
+      }
+    ]
+  },
   "permissions": {
     "allow": [
       "Bash(pip3 install *)",
@@ -58,7 +71,13 @@
       "Bash(curl -s --max-time 12 -o /dev/null -w \"zenodo: HTTP %{http_code}\\\\n\" https://zenodo.org)",
       "Bash(curl -s --max-time 20 \"https://physionet.org/files/hd-semg/1.0.0/\")",
       "Bash(curl -s --max-time 20 \"https://physionet.org/files/hd-semg/1.0.0/1dof_dataset/\")",
-      "Bash(curl -s --max-time 20 \"https://physionet.org/files/hd-semg/1.0.0/1dof_dataset/subject01_session1/\")"
+      "Bash(curl -s --max-time 20 \"https://physionet.org/files/hd-semg/1.0.0/1dof_dataset/subject01_session1/\")",
+      "Bash(ls -la research/)",
+      "Bash(ls -la .claude/)",
+      "Bash(ls -la sim_data/)",
+      "Bash(ls -la results/)",
+      "Bash(./.venv/bin/python -c \"import numpy as np; a=np.load\\('sim_data/real_hyser.npy'\\); g=np.load\\('sim_data/ground_truth.npy'\\); print\\('real_hyser', a.shape, a.dtype\\); print\\('ground_truth', g.shape, g.dtype\\)\")",
+      "Bash(tee results/00_stage0_real_hyser.txt)"
     ]
   }
 }
