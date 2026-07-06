@@ -49,7 +49,16 @@
       "Bash(rm -f sim_data/sweep.csv)",
       "Bash(git commit -q -m 'Stage 4: lossless benchmark + embedded codecs \\(bit-exact, beats refs\\) *)",
       "Bash(PYTHONPATH=host_tools ./.venv/bin/python host_tools/verify_compressed.py --selftest --gt sim_data/ground_truth.npy --max-samples 8000)",
-      "Bash(git commit -q -m 'Stage 5: compressed-path verifier + COMPRESSED frame type *)"
+      "Bash(git commit -q -m 'Stage 5: compressed-path verifier + COMPRESSED frame type *)",
+      "Bash(timeout 10 curl -sI https://physionet.org)",
+      "Bash(echo \"---exit=$?---\")",
+      "Bash(timeout 10 curl -sI https://raw.githubusercontent.com)",
+      "Bash(curl -s --max-time 12 -o /dev/null -w \"physionet: HTTP %{http_code}\\\\n\" https://physionet.org)",
+      "Bash(curl -s --max-time 12 -o /dev/null -w \"github raw: HTTP %{http_code}\\\\n\" https://raw.githubusercontent.com)",
+      "Bash(curl -s --max-time 12 -o /dev/null -w \"zenodo: HTTP %{http_code}\\\\n\" https://zenodo.org)",
+      "Bash(curl -s --max-time 20 \"https://physionet.org/files/hd-semg/1.0.0/\")",
+      "Bash(curl -s --max-time 20 \"https://physionet.org/files/hd-semg/1.0.0/1dof_dataset/\")",
+      "Bash(curl -s --max-time 20 \"https://physionet.org/files/hd-semg/1.0.0/1dof_dataset/subject01_session1/\")"
     ]
   }
 }

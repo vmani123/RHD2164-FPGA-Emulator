@@ -32,7 +32,9 @@ python3 -m venv .venv && ./.venv/bin/pip install numpy mtscomp zstandard tqdm
 PY=./.venv/bin/python
 export PYTHONPATH=host_tools
 
-# 1. generate realistic data (neural) or a simple deterministic stream
+# 1a. REAL neural data (recommended): Hyser 256-ch HD-sEMG from PhysioNet
+$PY host_tools/load_wfdb.py --download --channels 128 --record raw_data/hyser
+# 1b. or synthetic: realistic neural model / simple deterministic stream
 $PY host_tools/gen_neural_mem.py --mode neural --seconds 1.0 --spatial-corr 0.6 --report
 $PY host_tools/gen_neural_mem.py --mode simple --seconds 1.0        # sinusoids, no neural model
 
@@ -71,22 +73,31 @@ Key knobs: `--mode --seconds --fs --firing-rate-hz --noise-rms --spatial-corr
   with an **optimal per-channel gain** (tiny int16 side-info), before the
   temporal predictor. This is the lever to beat per-channel codecs.
 
-## Current results (128 ch, neural, `--spatial-corr 0.6`, 15000 samples)
+## Results
 
-| codec            | ratio | lossless |
-|------------------|-------|----------|
-| FLAC             | 1.42× | ✔ |
-| WavPack          | 2.34× | ✔ |
-| mtscomp          | 1.71× | ✔ |
-| zstd-19          | 2.00× | ✔ |
-| LZMA             | 2.16× | ✔ |
-| gzip-9           | 1.80× | ✔ |
-| delta+Rice       | 2.19× | ✔ |
-| **LMS+Rice**     | 2.34× | ✔ |
-| **LMS+Rice +xchan** | **2.57×** | ✔ |
+**REAL HD-sEMG** (Hyser `1dof_raw_finger1_sample1`, 128 ch, 15000 samples).
+Neighbour correlation is high (mean |corr| 0.90, R² 0.92) as real surface EMG is.
+Raw high-gain EMG is genuinely hard to compress losslessly, so ratios are modest
+and honest:
 
-**Cross-channel gain vs `--spatial-corr`:** 0.0 → −0.1%, 0.3 → +1.5%, 0.6 →
-+10%, 0.9 → +20%.
+| codec            | real HD-sEMG | synthetic neural (corr 0.6) |
+|------------------|-------------:|----------------------------:|
+| FLAC             | 0.97× | 1.42× |
+| WavPack          | 1.33× | 2.34× |
+| mtscomp          | 1.41× | 1.71× |
+| zstd-19          | 1.44× | 2.00× |
+| LZMA             | 1.67× | 2.16× |
+| gzip-9           | 1.38× | 1.80× |
+| delta+Rice       | 1.31× | 2.19× |
+| **LMS+Rice**     | 1.28× | 2.34× |
+| **LMS+Rice +xchan** | **1.43×** | **2.57×** |
+
+On real data the embedded `LMS+Rice+xchan` (1.43×) beats FLAC (0.97× — it slightly
+*expands* this data), WavPack (1.33×), zstd/mtscomp, with **+11% cross-channel
+gain**. Every codec round-trips bit-exact.
+
+**Synthetic cross-channel gain vs `--spatial-corr`:** 0.0 → −0.1%, 0.3 → +1.5%,
+0.6 → +10%, 0.9 → +20% — lets you probe the mechanism under a controlled knob.
 
 ## Honest notes
 
@@ -106,7 +117,8 @@ Key knobs: `--mode --seconds --fs --firing-rate-hz --noise-rms --spatial-corr
 ## Files
 
 ```
-host_tools/gen_neural_mem.py     data generator (simple + neural)
+host_tools/load_wfdb.py          load REAL data (PhysioNet WFDB, e.g. Hyser HD-sEMG)
+host_tools/gen_neural_mem.py     synthetic data generator (simple + neural)
 host_tools/embedded_codec.py     delta/LMS + Rice + cross-channel (bit-exact)
 host_tools/bench_lossless.py     benchmark + sweeps + CSV
 host_tools/emu_verify.py         RAW path verifier (+ --selftest)
