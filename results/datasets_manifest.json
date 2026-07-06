@@ -1,0 +1,106 @@
+[
+  {
+    "name": "synth_sc0.0",
+    "kind": "synthetic",
+    "grid": [
+      8,
+      16
+    ],
+    "fs": 30000.0,
+    "channels": 128,
+    "samples": 15000,
+    "duration_s": 0.5,
+    "noise_rms": 8.15,
+    "neigh_abs_corr": 0.0066,
+    "best_neigh_r2": 0.0002,
+    "sha256_16": "3d99f77dc9f05eb3",
+    "license": "generated",
+    "source": "gen_neural_mem.py",
+    "note": "controlled spatial-correlation sweep (sweeps only)",
+    "available": true
+  },
+  {
+    "name": "synth_sc0.3",
+    "kind": "synthetic",
+    "grid": [
+      8,
+      16
+    ],
+    "fs": 30000.0,
+    "channels": 128,
+    "samples": 15000,
+    "duration_s": 0.5,
+    "noise_rms": 10.38,
+    "neigh_abs_corr": 0.3644,
+    "best_neigh_r2": 0.1888,
+    "sha256_16": "1c77b63d054a1452",
+    "license": "generated",
+    "source": "gen_neural_mem.py",
+    "note": "controlled spatial-correlation sweep (sweeps only)",
+    "available": true
+  },
+  {
+    "name": "synth_sc0.6",
+    "kind": "synthetic",
+    "grid": [
+      8,
+      16
+    ],
+    "fs": 30000.0,
+    "channels": 128,
+    "samples": 15000,
+    "duration_s": 0.5,
+    "noise_rms": 16.31,
+    "neigh_abs_corr": 0.7603,
+    "best_neigh_r2": 0.6166,
+    "sha256_16": "fbdbb53d5d202fc8",
+    "license": "generated",
+    "source": "gen_neural_mem.py",
+    "note": "controlled spatial-correlation sweep (sweeps only)",
+    "available": true
+  },
+  {
+    "name": "synth_sc0.9",
+    "kind": "synthetic",
+    "grid": [
+      8,
+      16
+    ],
+    "fs": 30000.0,
+    "channels": 128,
+    "samples": 15000,
+    "duration_s": 0.5,
+    "noise_rms": 26.69,
+    "neigh_abs_corr": 0.9047,
+    "best_neigh_r2": 0.8327,
+    "sha256_16": "430a0b3244d416b0",
+    "license": "generated",
+    "source": "gen_neural_mem.py",
+    "note": "controlled spatial-correlation sweep (sweeps only)",
+    "available": true
+  },
+  {
+    "name": "hyser_1dof_f1_s1",
+    "kind": "wfdb",
+    "available": false,
+    "license": "CC-BY (PhysioNet hd-semg 1.0.0)",
+    "source": "https://physionet.org/files/hd-semg/1.0.0/1dof_dataset/subject01_session1/1dof_raw_finger1_sample1",
+    "note": "primary real HD-sEMG; force-varying subset ideal for xchan-vs-force"
+  },
+  {
+    "name": "capgmyo_dbA",
+    "kind": "wfdb",
+    "available": false,
+    "license": "ZJU CapgMyo (research use)",
+    "source": "TODO:capgmyo-mat-reader",
+    "note": "geometry-matched 8x16; needs a .mat reader + reachable host (Stage 2 TODO)"
+  },
+  {
+    "name": "cemhsey_320",
+    "kind": "wfdb",
+    "available": false,
+    "license": "CEMHSEY",
+    "source": "TODO:cemhsey-reader",
+    "note": "320-ch stress case; needs reader + reachable host (Stage 2 TODO)"
+  }
+]
