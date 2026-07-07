@@ -30,9 +30,12 @@ Usage:
 import argparse
 import hashlib
 import importlib.util
+import io
 import json
 import os
 import sys
+import urllib.request
+import zipfile
 
 import numpy as np
 
@@ -43,6 +46,86 @@ sys.path.insert(0, HOST)
 import gen_neural_mem as gnm  # noqa: E402
 
 CACHE = os.path.join(os.path.dirname(__file__), "..", "sim_data", "corpus")
+
+# 16-bit ADC full-scale used when emulating a recording from float physical units.
+# Robust-peak -> ADC16_FS maps the signal onto ~15 bits (a realistic 16-bit ADC),
+# which MAXIMISES bit usage and therefore cannot manufacture a degenerate (high)
+# lossless ratio -- it errs toward more entropy, never less. See _adc16().
+ADC16_FS = 30000.0
+
+
+# ---------------------------------------------------------------------------
+# Quantization: real float recordings (V / mV) -> int16 "ADC counts"
+# ---------------------------------------------------------------------------
+def _adc16(x_ct):
+    """Emulate a 16-bit ADC from a float [channels, samples] recording in
+    arbitrary physical units. Deterministic and independent of `max_samples`
+    truncation because the scale is derived from the full array handed in here
+    (loaders call this BEFORE Dataset.load() truncates).
+
+    Zero-mean per channel (RHD-with-DSP-HPF-like), then a single GLOBAL scale so
+    a robust peak (99.99th pct of |x|) lands near ADC full-scale. A global (not
+    per-channel) scale preserves the real inter-channel amplitude ratios the
+    cross-channel predictor exploits. Clipping touches only the top ~0.01% of
+    samples -- realistic ADC saturation. The resulting int16 array is the
+    lossless ground truth; the codec must round-trip *it* bit-for-bit."""
+    x = x_ct.astype(np.float64)
+    x = x - x.mean(axis=1, keepdims=True)
+    peak = float(np.percentile(np.abs(x), 99.99))
+    if peak <= 0:
+        peak = float(np.abs(x).max()) or 1.0
+    q = np.clip(np.round(x * (ADC16_FS / peak)), -32768, 32767)
+    return q.astype(np.int16)
+
+
+# ---------------------------------------------------------------------------
+# HTTP range-backed file object: read ONE member out of a multi-GB remote .zip
+# without downloading the whole archive. A zip's central directory is at the
+# tail, so zipfile seeks there first (a few KB) then pulls only the one member's
+# compressed bytes. Standard efficient range downloading over a REACHABLE host
+# (Zenodo) -- not a way around any egress block. CEMHSEY per-subject zips are
+# ~19 GB each; one HD-sEMG trial is ~38 MB compressed.
+# ---------------------------------------------------------------------------
+class HttpRangeFile(io.RawIOBase):
+    def __init__(self, url, timeout=180):
+        self.url = url
+        self.timeout = timeout
+        self.pos = 0
+        self.bytes_read = 0
+        req = urllib.request.Request(url, method="HEAD")
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            self.size = int(r.headers["Content-Length"])
+
+    def seek(self, offset, whence=io.SEEK_SET):
+        if whence == io.SEEK_SET:
+            self.pos = offset
+        elif whence == io.SEEK_CUR:
+            self.pos += offset
+        elif whence == io.SEEK_END:
+            self.pos = self.size + offset
+        return self.pos
+
+    def tell(self):
+        return self.pos
+
+    def seekable(self):
+        return True
+
+    def readable(self):
+        return True
+
+    def read(self, n=-1):
+        if n is None or n < 0:
+            n = self.size - self.pos
+        if n == 0 or self.pos >= self.size:
+            return b""
+        end = min(self.pos + n, self.size) - 1
+        req = urllib.request.Request(self.url, headers={"Range": f"bytes={self.pos}-{end}"})
+        with urllib.request.urlopen(req, timeout=self.timeout) as r:
+            data = r.read()
+        self.pos += len(data)
+        self.bytes_read += len(data)
+        return data
 
 
 # ---------------------------------------------------------------------------
@@ -69,6 +152,10 @@ class Dataset:
             x = self._load_wfdb()
         elif self.kind == "otb":
             x = self._load_otb()
+        elif self.kind == "capgmyo":
+            x = self._load_capgmyo()
+        elif self.kind == "cemhsey":
+            x = self._load_cemhsey()
         else:
             raise ValueError(f"unknown dataset kind {self.kind!r}")
         if max_samples and x.shape[1] > max_samples:
@@ -137,6 +224,74 @@ class Dataset:
         q = np.clip(np.round((emg - emg.mean(0)) / LSB_UV), -32768, 32767)
         return q.T.astype(np.int16)                       # [channels, samples]
 
+    # -- CapgMyo (ZJU, DB-a): 8x16 = 128-ch HD-sEMG @ 1 kHz -----------------
+    # Geometry-matched to the RHD2164 default grid. Downloaded from the figshare
+    # mirror (the canonical zju-capg.org host does not resolve from here); one
+    # per-subject zip is ~78 MB and holds 8 gestures x 10 trials of 1 s each,
+    # `data` = (1000, 128) float64 in amplifier volts. We concatenate the first
+    # sorted trials into one continuous record and ADC-emulate to int16.
+    def _load_capgmyo(self):
+        import scipy.io as sio
+        os.makedirs(CACHE, exist_ok=True)
+        zpath = os.path.join(CACHE, self.name + ".zip")
+        if not os.path.exists(zpath):
+            url = self.params["figshare_url"]
+            try:
+                urllib.request.urlretrieve(url, zpath)
+            except Exception as e:
+                if os.path.exists(zpath):
+                    os.remove(zpath)
+                raise RuntimeError(
+                    f"cannot download CapgMyo {self.name} from {url}: {e} "
+                    f"(network policy may block this host)")
+        span = int(self.params.get("source_samples", 25000))  # fixed extent -> stable scale
+        with zipfile.ZipFile(zpath) as zf:
+            names = sorted(n for n in zf.namelist() if n.lower().endswith(".mat"))
+            if not names:
+                raise RuntimeError(f"{self.name}: no .mat members in {zpath}")
+            chunks, total = [], 0
+            for n in names:
+                d = np.asarray(sio.loadmat(io.BytesIO(zf.read(n)))["data"], dtype=np.float64)
+                chunks.append(d)                          # (1000, 128)
+                total += d.shape[0]
+                if total >= span:
+                    break
+        emg = np.concatenate(chunks, axis=0)[:span]       # (samples, 128) volts
+        return _adc16(emg.T)                              # -> int16 [128, samples]
+
+    # -- CEMHSEY: 320-ch HD-sEMG @ 2048 Hz, 11 consecutive days -------------
+    # 5 physical arrays x 64 ch (grids 1-3: 8x8; grids 4-5: 5x13). Per-subject
+    # zips on Zenodo are ~19 GB; we range-extract ONE trial (`data_sEMG`, shape
+    # (320, 61500) float64 in mV, ~38 MB compressed) and cache the raw member so
+    # later loads are local. ADC-emulated to int16. High-channel stress case.
+    def _load_cemhsey(self):
+        import scipy.io as sio
+        os.makedirs(CACHE, exist_ok=True)
+        mpath = os.path.join(CACHE, self.name + ".mat")
+        if not os.path.exists(mpath):
+            url = self.params["zenodo_url"]
+            member = self.params.get("member")            # None -> first sorted .mat
+            try:
+                rf = HttpRangeFile(url)
+                with zipfile.ZipFile(rf) as zf:
+                    mats = sorted(n for n in zf.namelist() if n.lower().endswith(".mat"))
+                    if not mats:
+                        raise RuntimeError("no .mat members in remote zip")
+                    target = member if member in zf.namelist() else mats[0]
+                    raw = zf.read(target)
+            except Exception as e:
+                raise RuntimeError(
+                    f"cannot range-extract CEMHSEY {self.name} from {url}: {e} "
+                    f"(network policy may block this host)")
+            with open(mpath, "wb") as f:
+                f.write(raw)
+        m = sio.loadmat(mpath)
+        emg = np.asarray(m["data_sEMG"], dtype=np.float64)   # (320, 61500) mV
+        chans = self.grid[0] * self.grid[1]
+        if emg.shape[0] < chans:
+            raise RuntimeError(f"{self.name}: {emg.shape[0]} < {chans} ch")
+        return _adc16(emg[:chans])                            # -> int16 [320, samples]
+
     def available(self):
         if self.kind == "synthetic":
             return True
@@ -144,6 +299,10 @@ class Dataset:
             return self._available
         if self.kind == "otb":
             return self._otb_matpath() is not None
+        if self.kind == "capgmyo":
+            return os.path.exists(os.path.join(CACHE, self.name + ".zip"))
+        if self.kind == "cemhsey":
+            return os.path.exists(os.path.join(CACHE, self.name + ".mat"))
         # a wfdb set is available if already cached; we do not probe the network
         # here (that happens on load) -- treat "cached" as available.
         return os.path.exists(os.path.join(CACHE, self.name + ".dat"))
@@ -183,18 +342,34 @@ def corpus():
         params=dict(chan_offset=0),
         note="primary real HD-sEMG; force-varying subset ideal for xchan-vs-force"))
 
-    # ADD targets from datasets.md that need a format-specific reader AND a
-    # reachable host. Declared here so the manifest records them as pending;
-    # implement the reader when the network policy permits the download.
+    # ADD targets from datasets.md, now with real format-specific readers.
+    # Download-on-demand + cached; available() reflects the local cache (no
+    # network probe here). Both are float physical-unit recordings ADC-emulated
+    # to int16 by _adc16().
+
+    # CapgMyo DB-a, subject 1 (ZJU). Geometry-matched 8x16 = 128 ch @ 1 kHz.
+    # zju-capg.org does not resolve here; use the figshare mirror (article
+    # 7210397). One subject zip is ~78 MB. Channels raster the 8x16 array, so
+    # cols=16 makes the (g-1) parent the within-row electrode neighbour.
     sets.append(Dataset(
-        name="capgmyo_dbA", kind="wfdb", grid=(8, 16), fs=1000,
-        license="ZJU CapgMyo (research use)", source="TODO:capgmyo-mat-reader",
-        available=False,
-        note="geometry-matched 8x16; needs a .mat reader + reachable host (Stage 2 TODO)"))
+        name="capgmyo_dba_s1", kind="capgmyo", grid=(8, 16), fs=1000,
+        license="ZJU CapgMyo DB-a (research use; figshare mirror CC-BY)",
+        source="https://ndownloader.figshare.com/files/13277105 (figshare 7210397, dba-s1.zip)",
+        params=dict(figshare_url="https://ndownloader.figshare.com/files/13277105",
+                    source_samples=25000),
+        note="geometry-matched 8x16 HD-sEMG; cleanest cross-channel test (figshare mirror)"))
+
+    # CEMHSEY: 320-ch HD-sEMG @ 2048 Hz, 11 consecutive days (SJTU). Per-subject
+    # Zenodo zips are ~19 GB; we range-extract ONE trial (~38 MB) rather than the
+    # whole archive. 5 arrays x 64 ch -> grid (5,64) keeps the (g-1) parent inside
+    # one physical array (col resets at each 64-ch grid boundary). Stress case.
     sets.append(Dataset(
-        name="cemhsey_320", kind="wfdb", grid=(16, 20), fs=2048,
-        license="CEMHSEY", source="TODO:cemhsey-reader", available=False,
-        note="320-ch stress case; needs reader + reachable host (Stage 2 TODO)"))
+        name="cemhsey_s1_d1t1", kind="cemhsey", grid=(5, 64), fs=2048,
+        license="CEMHSEY (CC-BY-4.0, Zenodo)",
+        source="https://zenodo.org/records/15077957 (GRASP_S1.zip :: S1/D1/S1_Day1_Session1_Task1_Trial1.mat)",
+        params=dict(zenodo_url="https://zenodo.org/api/records/15077957/files/GRASP_S1.zip/content",
+                    member="S1/D1/S1_Day1_Session1_Task1_Trial1.mat"),
+        note="320-ch high-channel stress case; ONE trial range-extracted from a 19 GB Zenodo zip"))
     return sets
 
 

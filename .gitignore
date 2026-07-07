@@ -21,6 +21,7 @@ webtalk*
 # Python venv + harness artifacts
 .venv/
 sim_data/*.npy
+sim_data/corpus/
 __pycache__/
 raw_data/
 sim/*.vvp

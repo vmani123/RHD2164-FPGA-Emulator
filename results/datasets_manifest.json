@@ -102,25 +102,61 @@
   {
     "name": "hyser_1dof_f1_s1",
     "kind": "wfdb",
-    "available": false,
+    "grid": [
+      8,
+      16
+    ],
+    "fs": 2048.0,
+    "channels": 128,
+    "samples": 15000,
+    "duration_s": 7.324,
+    "noise_rms": 464.79,
+    "neigh_abs_corr": 0.8247,
+    "best_neigh_r2": 0.9126,
+    "sha256_16": "9d313f6f2b4dbe67",
     "license": "CC-BY (PhysioNet hd-semg 1.0.0)",
     "source": "https://physionet.org/files/hd-semg/1.0.0/1dof_dataset/subject01_session1/1dof_raw_finger1_sample1",
-    "note": "primary real HD-sEMG; force-varying subset ideal for xchan-vs-force"
+    "note": "primary real HD-sEMG; force-varying subset ideal for xchan-vs-force",
+    "available": true
   },
   {
-    "name": "capgmyo_dbA",
-    "kind": "wfdb",
-    "available": false,
-    "license": "ZJU CapgMyo (research use)",
-    "source": "TODO:capgmyo-mat-reader",
-    "note": "geometry-matched 8x16; needs a .mat reader + reachable host (Stage 2 TODO)"
+    "name": "capgmyo_dba_s1",
+    "kind": "capgmyo",
+    "grid": [
+      8,
+      16
+    ],
+    "fs": 1000.0,
+    "channels": 128,
+    "samples": 15000,
+    "duration_s": 15.0,
+    "noise_rms": 467.75,
+    "neigh_abs_corr": 0.2876,
+    "best_neigh_r2": 0.3058,
+    "sha256_16": "ebaec5e16ad637d9",
+    "license": "ZJU CapgMyo DB-a (research use; figshare mirror CC-BY)",
+    "source": "https://ndownloader.figshare.com/files/13277105 (figshare 7210397, dba-s1.zip)",
+    "note": "geometry-matched 8x16 HD-sEMG; cleanest cross-channel test (figshare mirror)",
+    "available": true
   },
   {
-    "name": "cemhsey_320",
-    "kind": "wfdb",
-    "available": false,
-    "license": "CEMHSEY",
-    "source": "TODO:cemhsey-reader",
-    "note": "320-ch stress case; needs reader + reachable host (Stage 2 TODO)"
+    "name": "cemhsey_s1_d1t1",
+    "kind": "cemhsey",
+    "grid": [
+      5,
+      64
+    ],
+    "fs": 2048.0,
+    "channels": 320,
+    "samples": 15000,
+    "duration_s": 7.324,
+    "noise_rms": 77.84,
+    "neigh_abs_corr": 0.7256,
+    "best_neigh_r2": 0.8628,
+    "sha256_16": "259c554e8e685bb2",
+    "license": "CEMHSEY (CC-BY-4.0, Zenodo)",
+    "source": "https://zenodo.org/records/15077957 (GRASP_S1.zip :: S1/D1/S1_Day1_Session1_Task1_Trial1.mat)",
+    "note": "320-ch high-channel stress case; ONE trial range-extracted from a 19 GB Zenodo zip",
+    "available": true
   }
 ]
