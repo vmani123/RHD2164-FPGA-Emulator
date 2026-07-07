@@ -80,6 +80,26 @@
     "available": true
   },
   {
+    "name": "otb_hdsemg_vl",
+    "kind": "otb",
+    "grid": [
+      5,
+      13
+    ],
+    "fs": 2048.0,
+    "channels": 64,
+    "samples": 15000,
+    "duration_s": 7.324,
+    "noise_rms": 54.11,
+    "neigh_abs_corr": 0.7848,
+    "best_neigh_r2": 0.9225,
+    "sha256_16": "b53c2a773d9cc817",
+    "license": "openhdemg sample (CC-BY-4.0)",
+    "source": "pip:openhdemg (bundled otb_testfile.mat)",
+    "note": "REAL 64-ch HD-sEMG grid; reachable via PyPI (physionet-free)",
+    "available": true
+  },
+  {
     "name": "hyser_1dof_f1_s1",
     "kind": "wfdb",
     "available": false,

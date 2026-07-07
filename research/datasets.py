@@ -29,11 +29,14 @@ Usage:
 """
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 import sys
 
 import numpy as np
+
+LSB_UV = 0.195   # RHD2164 ADC step (uV/LSB) -- quantize real uV recordings to counts
 
 HOST = os.path.join(os.path.dirname(__file__), "..", "host_tools")
 sys.path.insert(0, HOST)
@@ -64,6 +67,8 @@ class Dataset:
             x = self._load_synthetic()
         elif self.kind == "wfdb":
             x = self._load_wfdb()
+        elif self.kind == "otb":
+            x = self._load_otb()
         else:
             raise ValueError(f"unknown dataset kind {self.kind!r}")
         if max_samples and x.shape[1] > max_samples:
@@ -107,11 +112,38 @@ class Dataset:
                     -32768, 32767).astype(np.int16)
         return x
 
+    @staticmethod
+    def _otb_matpath():
+        """Locate the real HD-sEMG sample bundled with the pip-installed openhdemg
+        package (no blocked host needed -- it ships in the wheel)."""
+        spec = importlib.util.find_spec("openhdemg")
+        if spec is None or not spec.submodule_search_locations:
+            return None
+        p = os.path.join(spec.submodule_search_locations[0],
+                         "library", "decomposed_test_files", "otb_testfile.mat")
+        return p if os.path.exists(p) else None
+
+    def _load_otb(self):
+        import scipy.io as sio
+        path = self.params.get("matpath") or self._otb_matpath()
+        if not path:
+            raise RuntimeError("openhdemg not installed; `pip install openhdemg scipy` "
+                               "to get its bundled real HD-sEMG sample")
+        m = sio.loadmat(path, squeeze_me=True, struct_as_record=False)
+        data = np.asarray(m["Data"], dtype=np.float64)
+        nch = self.params.get("emg_channels", 64)
+        emg = data[:, :nch]                              # cols 0..63 = electrode grid
+        # zero-mean per channel + quantize to RHD2164 counts (real uV -> int16)
+        q = np.clip(np.round((emg - emg.mean(0)) / LSB_UV), -32768, 32767)
+        return q.T.astype(np.int16)                       # [channels, samples]
+
     def available(self):
         if self.kind == "synthetic":
             return True
         if self._available is not None:
             return self._available
+        if self.kind == "otb":
+            return self._otb_matpath() is not None
         # a wfdb set is available if already cached; we do not probe the network
         # here (that happens on load) -- treat "cached" as available.
         return os.path.exists(os.path.join(CACHE, self.name + ".dat"))
@@ -130,6 +162,17 @@ def corpus():
             license="generated", source="gen_neural_mem.py",
             params=dict(seconds=0.5, spatial_corr=sc, seed=1),
             note="controlled spatial-correlation sweep (sweeps only)"))
+
+    # Real HD-sEMG that is reachable HERE: the OTB GR08MM1305 sample bundled with
+    # the pip-installed openhdemg package (64-ch 5x13 electrode grid @ 2048 Hz,
+    # vastus lateralis, ~32 s). No blocked host needed -- ships in the wheel.
+    # Channel index runs down each column of 13, so grid (5,13)/cols=13 makes the
+    # left-neighbour parent (g-1) the nearest physical (within-column) electrode.
+    sets.append(Dataset(
+        name="otb_hdsemg_vl", kind="otb", grid=(5, 13), fs=2048,
+        license="openhdemg sample (CC-BY-4.0)", source="pip:openhdemg (bundled otb_testfile.mat)",
+        params=dict(emg_channels=64),
+        note="REAL 64-ch HD-sEMG grid; reachable via PyPI (physionet-free)"))
 
     # Real primary: Hyser HD-sEMG (PhysioNet, CC-BY). 128 of 256 ch @ 2048 Hz.
     sets.append(Dataset(
