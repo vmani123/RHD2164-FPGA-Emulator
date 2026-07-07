@@ -101,7 +101,7 @@ Real HD-sEMG (|corr|≈0.79) lands at +17.5% achieved — consistent with the sw
 | 2 Corpus | ✅ `datasets.py` (synthetic + **real OTB**; Hyser/CapgMyo/CEMHSEY pending network) |
 | 3 Benchmark | ✅ `bench.py`, `results/03_bench.csv`, `results/05_real_otb.csv` |
 | 4 Search + analysis | ✅ `search.py`, real + synthetic Pareto, ablations |
-| 5 Survey | ⏳ `SURVEY.md` (needs web; egress-blocked here) |
+| 5 Survey | ✅ `SURVEY.md` (web reachable; ranked candidates + next-codec recs) |
 | 6 Report | ✅ this file |
 
 **Reachable real data (OTB via PyPI) let Stages 3–4 produce a genuine real-data
