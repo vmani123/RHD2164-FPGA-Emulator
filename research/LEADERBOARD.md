@@ -6,7 +6,7 @@ produced by the harness (`research/bench.py` + `research/search.py`), asserted
 bit-exact, and gated by `embedded_ok` — never by reasoning (non-negotiables #1,
 #2, #4). Maintained per Stage 6 of `../COMPRESSION_RESEARCH_AGENT_PROMPT.md`.
 
-_Updated: 2026-07-07 · branch `compression-wip`._
+_Updated: 2026-07-08 · branch `compression-cycle-2026-07-08`._
 
 ## Headline (REAL data decides — #3)
 
@@ -55,6 +55,19 @@ all of which the embedded codec beats.
   carries little inter-electrode redundancy). CapgMyo is the honest **negative
   control**: the harness does *not* manufacture a win where the physics isn't there.
 - Every real ratio (best 2.14×) is ≪ the 6× leak ceiling → no degenerate data.
+- **Cycle 1 (2026-07-08) — new candidate `LMS+Rice+xchan_adaptive`, NOT promoted as a
+  new best (Pareto-dominated).** On real `otb_hdsemg_vl` it measures **2.13×** at cost
+  0.065, against the incumbent `LMS+Rice+xchan`'s 2.14× at cost 0.057 — a −0.48% ratio
+  give-up **and** higher cost, so per non-negotiable #2 (rank on the Pareto front) it
+  does not join the front and `LMS+Rice+xchan` remains the recorded best-ratio
+  embeddable codec on every real set, unchanged. It is kept, registered (bit-exact,
+  double-verified `embedded_ok`), because it closes a real gap: the incumbent's 2.14×
+  depends on a float whole-signal beta computed offline over the whole recording and
+  shipped as header side-info — not actually producible on-node — whereas the new
+  codec's beta is genuinely causal (look-ahead = 0) and needs **zero side-info** (the
+  decoder recomputes it from the previous already-reconstructed block). See
+  `experiments/001_lms_rice_xchan_adaptive.md` for the full record, including the
+  ranked next hypotheses aimed at recovering the give-up.
 
 ## Best embeddable after search (real Hyser)
 
@@ -109,10 +122,22 @@ by each set's real neighbour correlation, consistent with the sweep.
 - **If minimizing hardware is paramount** (no adaptive-weight loop), port
   **`delta+Rice+xchan`** instead — Hyser 1.45× at cost 0.016 (98% of the best ratio)
   with fixed integer-difference predictors only.
-- **Port caveat:** the `+xchan` beta is currently derived offline over the whole
-  signal; the embeddable form computes beta per block (look-ahead = one block).
-  This is the first RTL/firmware implementation task (flagged in registry
-  `meta.notes`).
+- **Port caveat — a real streaming realization now exists (2026-07-08), not yet a
+  ratio win.** The `+xchan` beta used to be derived offline over the whole signal
+  (float, shipped as header side-info) — not actually realizable on-node. Cycle 1
+  added and double-verified **`LMS+Rice+xchan_adaptive`**, registered (not promoted
+  as the new best — see per-dataset summary above), which replaces it with a
+  **backward-adaptive per-block integer beta** — the decoder recomputes the identical
+  gain causally from the previous already-reconstructed block (block 0 = beta 0), so
+  look-ahead = 0 and **zero beta side-info** is transmitted. It is bit-exact,
+  integer-only, and `embedded_ok`, measured on real `otb_hdsemg_vl` at **2.13×** (a
+  −0.48% ratio give-up and +13.6% cost vs the un-portable offline-beta 2.14×) — so
+  it is *this cycle's* recommended actual port target for the cross-channel front-end,
+  precisely because the incumbent's 2.14× cannot be produced on real hardware at all.
+  **Next hypothesis: fold this adaptive beta into the order-4 predictor** (`lms4` +
+  adaptive beta) to try to recover the give-up and land below cost 0.057, which would
+  make it a genuine Pareto win rather than just a correctness fix. See
+  `experiments/001_lms_rice_xchan_adaptive.md`.
 
 ## Status vs. the 6-stage plan
 

@@ -147,6 +147,133 @@ def fixed_decode(buf):
 
 
 # ===========================================================================
+# NEW candidate: backward-adaptive per-block cross-channel beta.
+# ---------------------------------------------------------------------------
+# The existing +xchan front-end (embedded_codec.cross_betas/forward/inverse)
+# derives ONE gain `beta` per channel over the WHOLE recording (a float
+# least-squares ratio) and ships it as header side-info -- i.e. it needs the
+# whole signal offline to pick beta. This variant makes the gain (i) track
+# non-stationarity and (ii) removes the look-ahead AND the side-info:
+#
+#   * beta for block i is (re)estimated from the PREVIOUS block's ALREADY-
+#     reconstructed samples of the channel and its grid parent, using
+#     integer-only fixed-point arithmetic (two dot-products + one rounded
+#     integer divide per block-channel). Because the reconstruction is lossless,
+#     the parent/child samples the decoder has after block i-1 are bit-identical
+#     to the encoder's, so the decoder recomputes the SAME beta causally and NO
+#     beta is transmitted.
+#   * Block 0 bootstraps with beta = 0 (no prior block exists yet), so the first
+#     block is coded as if xchan were off; the gain then adapts each block.
+#
+# Everything downstream (grid parent tree, order-8 sign-sign LMS, adaptive
+# Golomb-Rice) is identical to the current best codec "LMS+Rice+xchan"; only the
+# gain-estimation is swapped from whole-signal side-info to backward-adaptive.
+# ===========================================================================
+XADAPT_MAGIC = 0x5841        # 'XA'
+XADAPT_BLOCK = ec.BLOCK      # cross-channel adaptation block (samples); tunable
+XADAPT_SHIFT = ec.CROSS_SHIFT  # fixed-point scale for beta (matches the family)
+
+
+def _int_beta(num, den, shift=XADAPT_SHIFT):
+    """Integer-only fixed-point gain ~= round(num/den * 2**shift) for den > 0,
+    clamped to int16. No float anywhere; deterministic and therefore identical
+    on encode and decode. `den` is a sum of squares so it is always >= 0."""
+    d = int(den)
+    if d <= 0:
+        return 0
+    numer = int(num) << shift
+    if numer >= 0:
+        b = (numer + d // 2) // d          # symmetric round-half-up
+    else:
+        b = -(((-numer) + d // 2) // d)
+    if b > 32767:
+        return 32767
+    if b < -32768:
+        return -32768
+    return b
+
+
+def _beta_from_block(xc_blk, xp_blk, shift=XADAPT_SHIFT):
+    """Backward-adaptive gain from ONE already-reconstructed block: the
+    least-squares ratio <x_c, x_p> / <x_p, x_p>, integer/fixed-point. Identical
+    call on both sides guarantees the same beta bit-for-bit."""
+    xc = xc_blk.astype(np.int64)
+    xp = xp_blk.astype(np.int64)
+    num = int((xc * xp).sum())
+    den = int((xp * xp).sum())
+    return _int_beta(num, den, shift)
+
+
+def _xadapt_forward(x, parent, B=XADAPT_BLOCK, shift=XADAPT_SHIFT):
+    """Cross-channel decorrelation with backward-adaptive per-block gain.
+    y[c,t] = x[c,t] - ((beta[c,block(t)] * x[parent,t]) >> shift), beta derived
+    from the previous block. Operates on the RAW signal, which the decoder
+    reconstructs bit-exactly, so the betas match."""
+    x = x.astype(np.int64)
+    C, N = x.shape
+    y = x.copy()
+    nblocks = (N + B - 1) // B
+    for c in range(C):
+        p = parent[c]
+        if p < 0:                          # root channel: no parent to subtract
+            continue
+        beta = 0                           # block-0 bootstrap
+        for i in range(nblocks):
+            s, e = i * B, min((i + 1) * B, N)
+            if i > 0:
+                beta = _beta_from_block(x[c, (i - 1) * B:i * B],
+                                        x[p, (i - 1) * B:i * B], shift)
+            y[c, s:e] = x[c, s:e] - ((beta * x[p, s:e]) >> shift)
+    return y
+
+
+def _xadapt_inverse(y, parent, B=XADAPT_BLOCK, shift=XADAPT_SHIFT):
+    """Invert _xadapt_forward. parent[c] < c so the parent channel is fully
+    reconstructed before c; within a channel, block i's beta is recomputed from
+    the already-reconstructed block i-1 -- exactly mirroring the encoder."""
+    y = y.astype(np.int64)
+    C, N = y.shape
+    x = y.copy()                           # root channels already correct
+    nblocks = (N + B - 1) // B
+    for c in range(C):
+        p = parent[c]
+        if p < 0:
+            continue
+        beta = 0
+        for i in range(nblocks):
+            s, e = i * B, min((i + 1) * B, N)
+            if i > 0:
+                beta = _beta_from_block(x[c, (i - 1) * B:i * B],
+                                        x[p, (i - 1) * B:i * B], shift)
+            x[c, s:e] = y[c, s:e] + ((beta * x[p, s:e]) >> shift)
+    return x
+
+
+def xadapt_encode(x, cols=16):
+    x = np.asarray(x, np.int64)
+    C, N = x.shape
+    parent = ec.grid_parents(C, cols)
+    y = _xadapt_forward(x, parent)
+    res = ec.lms_forward(y)                # order-8 sign-sign LMS (same as family)
+    body = b"".join(ec.rice_encode_1d(res[c]) for c in range(C))
+    hdr = struct.pack("<HHII", XADAPT_MAGIC, cols, C, N)  # NO beta side-info
+    return hdr + body
+
+
+def xadapt_decode(buf):
+    magic, cols, C, N = struct.unpack_from("<HHII", buf, 0)
+    assert magic == XADAPT_MAGIC, "bad xadapt magic"
+    off = 12
+    res = np.empty((C, N), np.int64)
+    for c in range(C):
+        arr, off = ec.rice_decode_1d(buf, off)
+        res[c] = arr
+    y = ec.lms_inverse(res)
+    x = _xadapt_inverse(y, ec.grid_parents(C, cols))
+    return x.astype(np.int16)
+
+
+# ===========================================================================
 # Uniform codec objects + the registry
 # ===========================================================================
 class Codec:
@@ -190,6 +317,22 @@ _XCHAN_STATE = 6
 _XCHAN_NOTE = ("software impl derives per-channel beta over the whole signal; "
                "embeddable realization computes beta per block (look-ahead=block)")
 
+# xchan_adaptive (backward-adaptive realization): on top of the +xchan per-sample
+# work (1 mul + 1 shift + 1 sub), each block-channel accumulates two running
+# dot-products (<x_c,x_p> and <x_p,x_p>, ~2 macs/sample-ch) and does ONE rounded
+# integer divide at the block boundary (amortised ~divide/BLOCK). The decoder
+# RECOMPUTES the same beta (it is not transmitted), so dec_ops == enc_ops here.
+_XADAPT_XTRA = 3   # 2 dot-product macs + amortised block divide, per sample-ch
+# state/ch: order-8 LMS (40) + current beta int16 (2) + two int64 block
+# accumulators for the running dot-products (16).
+_XADAPT_STATE = _LMS_STATE + 18
+_XADAPT_NOTE = (
+    "backward-adaptive per-block cross-channel gain: beta[block i] is the "
+    "integer least-squares ratio <x_c,x_p>/<x_p,x_p> over the PREVIOUS block's "
+    "already-reconstructed samples (block 0 -> beta=0). Fully causal, "
+    "lookahead=0, and NO beta side-info -- the decoder recomputes it. Replaces "
+    "the whole-signal float beta + header side-info of the +xchan variants.")
+
 REGISTRY = {}
 
 
@@ -224,6 +367,15 @@ _register(Codec("LMS+Rice+xchan", _e, _d, CodecMeta(
     state_bytes_per_ch=_LMS_STATE + _XCHAN_STATE, causal=True,
     lookahead_samples=ec.BLOCK, block_size=ec.BLOCK, notes=_XCHAN_NOTE),
     family="cross-channel", desc="LMS + grid-neighbour decorrelation (current best)"))
+
+# NEW candidate: backward-adaptive per-block cross-channel beta (no side-info,
+# fully causal -> lookahead 0, unlike the whole-signal +xchan variants above).
+_register(Codec("LMS+Rice+xchan_adaptive", xadapt_encode, xadapt_decode, CodecMeta(
+    integer_only=True, enc_ops=_LMS_OPS + _XCHAN_OPS + _XADAPT_XTRA,
+    dec_ops=_LMS_OPS + _XCHAN_OPS + _XADAPT_XTRA,
+    state_bytes_per_ch=_XADAPT_STATE, causal=True, lookahead_samples=0,
+    block_size=XADAPT_BLOCK, notes=_XADAPT_NOTE), family="cross-channel",
+    desc="LMS + grid-neighbour decorrelation, backward-adaptive per-block gain"))
 
 # NEW seeded candidate
 _register(Codec("fixed0-3+Rice", fixed_encode, fixed_decode, CodecMeta(
