@@ -6,7 +6,7 @@ produced by the harness (`research/bench.py` + `research/search.py`), asserted
 bit-exact, and gated by `embedded_ok` — never by reasoning (non-negotiables #1,
 #2, #4). Maintained per Stage 6 of `../COMPRESSION_RESEARCH_AGENT_PROMPT.md`.
 
-_Updated: 2026-07-07 · branch `compression-wip`._
+_Updated: 2026-07-10 · branch `compression-cycle-2026-07-10`._
 
 ## Headline (REAL data decides — #3)
 
@@ -55,6 +55,68 @@ all of which the embedded codec beats.
   carries little inter-electrode redundancy). CapgMyo is the honest **negative
   control**: the harness does *not* manufacture a win where the physics isn't there.
 - Every real ratio (best 2.14×) is ≪ the 6× leak ceiling → no degenerate data.
+
+## Cycle 2026-07-10 — best-partner cross-channel selection (SURVEY rec #2)
+
+Hyser/CEMHSEY/CapgMyo were network-unreachable this session; `otb_hdsemg_vl` was
+the only real dataset reachable, so this cycle's results are OTB-only (Hyser
+numbers above are unchanged from the last session that could reach it).
+
+New codec `LMS+Rice+xchan_bestpartner`: best-of-4 causal-neighbour selection
+per channel (parent + integer beta sent as side-info) in place of the single
+fixed grid-parent. Double-verified (two independent adversarial verifiers,
+each re-running the round-trip and re-measuring from scratch): **PROMOTE**
+(no split — both agree).
+
+Real `otb_hdsemg_vl` (64ch, 5×13, 15 000 samp — bit-exact, `embedded_ok`):
+
+| codec | ratio | cost | xchan gain (isolated) | note |
+|---|---:|---:|---:|---|
+| **LMS+Rice+xchan_bestpartner** | **2.15×** | 0.063 | **+18.5%** | non-dominated max-ratio corner; +0.40% over incumbent |
+| LMS+Rice+xchan (incumbent) | 2.14× | 0.057 | +18.0% | prior best embeddable |
+| delta+Rice+xchan | 2.04× | 0.013 | +16.2% | cheapest xchan |
+
+- **Best-partner adds +0.55 pp of achieved cross-channel gain** (18.0% → 18.5%,
+  isolated on real data) at **+10% cost** (0.057 → 0.063). It sits on the
+  ratio-vs-cost Pareto front (higher ratio AND higher cost — neither it nor the
+  incumbent dominates) but the +0.40% real ratio lift does **not** displace the
+  port recommendation below.
+- Bit-exact round-trip verified independently (2×, by both verifiers) on the
+  real array; ratio 2.15× ≪ 6× ceiling; no regression vs incumbent; only
+  `SURVEY.md`/`research/registry.py` touched this cycle (`sim/run_sim.sh` still
+  green, 153 transfers / 0 errors).
+- **Search refinement:** `research/search.py` on OTB (15 000 samp) reconfirms
+  order-4 dominates order-8 and refines the single-parent xchan port pick to
+  **`lms4s7+x6/b512` = 2.163×, cost 0.027** (dominates the order-8 start on both
+  axes). This remains the **value/port recommendation**; bestpartner is the
+  "max ratio if you'll pay the cost" corner, built on order-8 and not yet
+  retuned to order-4.
+- **Port caveat unchanged in kind:** partner+beta derived offline over the
+  whole signal; the embeddable realization is per-block (lookahead = 256) —
+  same caveat class as the incumbent's offline whole-signal beta.
+- **Not promoted as the new headline/port pick** — the real-data win is
+  marginal (+0.40% ratio for +10% cost); it is registered as a Pareto-front
+  entry, not a replacement for the port recommendation.
+- **Next hypothesis (highest ranked payoff):** rebuild best-partner on the
+  order-4 predictor (`lms4s7...`, search-proven cheaper AND higher ratio) —
+  expected to dominate the incumbent on both axes instead of only extending
+  the ratio ceiling at extra cost.
+
+OTB Pareto corners (real, 15 000 samp, embedded_ok only):
+
+| config | ratio | cost | neural_ok | character |
+|---|---:|---:|:--:|---|
+| delta+x6/b512 | 2.04× | 0.016 | ✅ | cheapest embeddable with xchan |
+| fixed+x6/b512 | 2.13× | 0.025 | ✅ | fixed-predictor xchan |
+| lms4s7+x6/b512 | 2.163× | 0.027 | ✅ | **best value / port pick** |
+| LMS+Rice+xchan_bestpartner | 2.15× | 0.063 | ✅ | max-ratio corner (best-of-4 neighbour) |
+
+Cycle 1 (`compression-cycle-2026-07-08`, unmerged) previously tried a
+backward-adaptive per-block beta (`LMS+Rice+xchan_adaptive`, 2.13×/cost 0.065
+on OTB) — dominated by the incumbent, not promoted. This cycle's best-partner
+selection is a different mechanism (which neighbour, not how the beta adapts)
+and is the first candidate this research loop has produced that is genuinely
+non-dominated vs. the incumbent on real data.
 
 ## Best embeddable after search (real Hyser)
 
@@ -113,6 +175,14 @@ by each set's real neighbour correlation, consistent with the sweep.
   signal; the embeddable form computes beta per block (look-ahead = one block).
   This is the first RTL/firmware implementation task (flagged in registry
   `meta.notes`).
+- **2026-07-10 update (OTB, the only real set reachable that session):** a new
+  candidate, `LMS+Rice+xchan_bestpartner` (best-of-4 causal-neighbour
+  selection), reached a non-dominated max-ratio corner (2.15× at cost 0.063 vs
+  the incumbent's 2.14×/0.057) — real but marginal (+0.40%), and it does
+  **not** change this port recommendation. The OTB-local search also refined
+  the single-parent port pick slightly to `lms4s7+x6/b512` (2.163×, cost
+  0.027); see the cycle section above for the full picture. Kept registered,
+  not promoted to headline.
 
 ## Status vs. the 6-stage plan
 
