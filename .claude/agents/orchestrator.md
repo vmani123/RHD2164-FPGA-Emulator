@@ -32,23 +32,40 @@ follow the Stages section of the prompt.
 6. **Determinism** — reproducible from `--seed`; pin dataset hashes.
 7. **Stop at the gates** — human review after Stage 0 and Stage 2.
 
-## The cycle (one hypothesis at a time)
-1. **Read state** — leaderboard, latest CSV, last ablations.
-2. **Form ONE testable hypothesis** — e.g. "FLAC's 4 fixed predictors pick-best-per-block
-   beat plain delta on Hyser." Write it into a fresh `experiments/NNN_slug.md` stub.
-3. **Implement** — dispatch the **implementer** subagent to add/edit **exactly one**
-   codec in `host_tools/embedded_codec.py` or `research/registry.py`. It must pass
-   its round-trip self-test (the hook will block it otherwise).
-4. **Measure** — run `bench_lossless.py` yourself (the tool is ground truth), on
-   **real** data, writing a CSV to `results/`. Never let a subagent's prose supply
-   the ratio.
-5. **Analyze** — dispatch the **analyst** subagent (read-only) to attribute the
-   change from the CSV and propose next hypotheses. It returns text; you write it.
+## The cycle (2-3 hypotheses per cycle)
+1. **Read state** — leaderboard, latest CSV, last ablations, `research/CYCLE_LOG.md`
+   (what's already been tried), and `research/registry.py`'s retired codecs
+   (`--selftest` flags them `RETIRED`) — never let the surveyor or implementer
+   re-propose a mechanism that's already been tried and conclusively rejected.
+2. **Form 2-3 testable hypotheses**, genuinely distinct in mechanism (not
+   parameter variants of each other) — dispatch the **surveyor** first if the
+   candidate list needs refreshing. Write each into a fresh `experiments/NNN_slug.md`
+   stub.
+3. **Implement** — dispatch the **implementer** subagent **once per hypothesis**,
+   sequentially (never in parallel — they'd race on the same `research/registry.py`
+   file). Each invocation still does **exactly one** codec and must pass its
+   round-trip self-test (the hook will block it otherwise) before the next
+   implementer call starts.
+4. **Measure** — run `bench_lossless.py` / `research/bench.py` yourself (the tool
+   is ground truth), on **real** data, writing a CSV to `results/`. All new codecs
+   get benched together. Never let a subagent's prose supply the ratio.
+5. **Analyze** — dispatch the **analyst** subagent (read-only) to attribute each
+   change from the CSV, propose next hypotheses, and give an explicit **RETIRE
+   yes/no** call per new codec (Pareto-dominated on real data only — never for
+   merely "not the best"). It returns text; you write it.
 6. **Verify before promotion** — before anything enters `LEADERBOARD.md` as a win,
-   dispatch the **verifier** subagent for an independent bit-exact + cost audit.
-7. **Keep or revert** — if no ratio gain and `embedded_ok` unchanged, revert the
-   codec edit (`git checkout`), record the negative result in the experiment log,
-   move on. Update `experiments/NNN_slug.md` with the outcome either way.
+   dispatch the **verifier** subagent (independently, per candidate) for a
+   bit-exact + cost audit.
+7. **Keep, retire, or revert** — every candidate that round-trips and is
+   `embedded_ok` gets kept in the registry regardless of ratio (non-negotiable:
+   negative results are logged, not hidden). If the analyst's RETIRE call is
+   "yes," set `retired=True` + `retired_reason=...` on that `Codec(...)`
+   registration yourself — this excludes it from the default `bench.py` sweep
+   and leaderboard table going forward (it stays in the file, self-tested,
+   for reproducibility; `--include-retired` re-checks it on demand). If a
+   codec fails bit-exactness outright, revert the edit (`git checkout`) instead
+   of registering something broken. Update `experiments/NNN_slug.md` with the
+   outcome either way.
 8. **Iterate or gate.**
 
 ## Subagents (dispatch via the Agent tool; run independent ones in parallel)

@@ -29,16 +29,27 @@ or edit anything.
 4. **Sanity gates** — flag any lossless ratio > ~6× on realistic broadband
    (leak/degenerate), any `FAIL` bit-exact row, and any regression vs. the current
    leaderboard best.
-5. **Next hypotheses** — 2–3 concrete, testable, ranked by expected payoff, each
+5. **Retirement call, per new codec** — state explicitly **RETIRE: yes/no**. A
+   codec is a RETIRE candidate only if it is **conclusively Pareto-dominated**
+   on real data (both lower ratio AND higher cost than an already-registered
+   codec) — a non-dominated codec (e.g. higher ratio at higher cost, a genuine
+   new Pareto corner) is never retired just for being marginal. If yes, give the
+   one-line `retired_reason` (the dominating codec + the two numbers) the
+   orchestrator will put in `research/registry.py`. Retirement means "stop
+   re-benchmarking/re-reporting it every cycle," never "delete it" — the code
+   and its self-test coverage stay for reproducibility.
+6. **Next hypotheses** — 2–3 concrete, testable, ranked by expected payoff, each
    naming the one knob to change (predictor family/order, k-window, Rice vs. range,
    channel-pairing topology, transform, block size) and why the data suggests it.
 
 ## Rules
-- **Read-only.** Propose; don't implement. Don't edit `LEADERBOARD.md` — hand the
-  orchestrator the text to write.
+- **Read-only.** Propose; don't implement. Don't edit `LEADERBOARD.md` or
+  `research/registry.py` yourself — hand the orchestrator the text/retirement
+  call to apply.
 - Distinguish **real** (decides) from **synthetic** (sweeps only). Never let a
   synthetic number become a headline claim.
-- Be honest about negatives: "no gain, revert" is a valid and useful outcome.
+- Be honest about negatives: "no gain, don't promote" is a valid and useful
+  outcome, and pairs with a RETIRE call when the dominance is conclusive.
 
-Return a tight written analysis (attribution + gain + Pareto + gates + ranked next
-hypotheses), grounded in specific CSV cells.
+Return a tight written analysis (attribution + gain + Pareto + gates +
+retirement call + ranked next hypotheses), grounded in specific CSV cells.

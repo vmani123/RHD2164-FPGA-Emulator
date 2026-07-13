@@ -6,7 +6,13 @@ produced by the harness (`research/bench.py` + `research/search.py`), asserted
 bit-exact, and gated by `embedded_ok` — never by reasoning (non-negotiables #1,
 #2, #4). Maintained per Stage 6 of `../COMPRESSION_RESEARCH_AGENT_PROMPT.md`.
 
-_Updated: 2026-07-10 · branch `compression-cycle-2026-07-10`._
+_Updated: 2026-07-13 · branch `compression-wip`. Cycles 1 & 2 (2026-07-08,
+2026-07-10) merged. `LMS+Rice+xchan_adaptive` is now marked `retired=True` in
+`research/registry.py` (conclusively Pareto-dominated — kept, bit-exact,
+excluded from the default `bench.py` sweep and this table's headline rows;
+`--include-retired` re-checks it on demand). From this point the loop targets
+2-3 genuinely distinct candidates per cycle instead of one; retirement is how
+dominated ones stop being re-benchmarked every time without deleting them._
 
 ## Headline (REAL data decides — #3)
 

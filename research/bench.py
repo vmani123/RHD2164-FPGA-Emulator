@@ -56,10 +56,13 @@ def _ref_rows(x):
     return rows
 
 
-def _codec_rows(x, cols):
-    """Run every registry codec on [C,N] with bit-exact assert."""
+def _codec_rows(x, cols, include_retired=False):
+    """Run every active registry codec on [C,N] with bit-exact assert.
+    Retired codecs (Pareto-dominated on real data, per a verifier's audit) are
+    excluded by default so they stop being re-benchmarked/re-reported every
+    cycle; pass include_retired=True to re-check one explicitly."""
     rows = []
-    for c in reg.list_codecs():
+    for c in reg.list_codecs(include_retired=include_retired):
         t = time.perf_counter(); blob = c.encode(x, cols=cols)
         enc = time.perf_counter() - t
         t = time.perf_counter(); y = c.decode(blob)
@@ -87,7 +90,10 @@ def _xchan_gain(rows):
     return out
 
 
-def run(datasets, max_samples, csv_path):
+def run(datasets, max_samples, csv_path, include_retired=False):
+    if include_retired and reg.list_retired():
+        print("(including retired codecs this run: " +
+              ", ".join(c.name for c in reg.list_retired()) + ")")
     all_rows = []
     for ds in datasets:
         if not ds.available():
@@ -100,7 +106,7 @@ def run(datasets, max_samples, csv_path):
               f"grid {grid}, {'REAL' if is_real else 'synthetic'}]  "
               f"{x.nbytes/1e6:.2f} MB raw")
 
-        rows = _ref_rows(x) + _codec_rows(x, cols)
+        rows = _ref_rows(x) + _codec_rows(x, cols, include_retired=include_retired)
         flac = next((r for r in rows if r["name"] == "flac"), None)
         gains = _xchan_gain(rows)
 
@@ -146,12 +152,16 @@ def main():
                     help="dataset names to run (default: all available)")
     ap.add_argument("--max-samples", type=int, default=8000)
     ap.add_argument("--csv", default="results/03_bench.csv")
+    ap.add_argument("--include-retired", action="store_true",
+                    help="also benchmark retired (Pareto-dominated) codecs, "
+                         "e.g. to re-check an old verdict after a shared "
+                         "primitive changes (excluded from the default sweep)")
     args = ap.parse_args()
 
     sets = dsmod.corpus()
     if args.datasets:
         sets = [d for d in sets if d.name in args.datasets]
-    run(sets, args.max_samples, args.csv)
+    run(sets, args.max_samples, args.csv, include_retired=args.include_retired)
 
 
 if __name__ == "__main__":

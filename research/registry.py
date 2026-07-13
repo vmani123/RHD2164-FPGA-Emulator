@@ -402,7 +402,8 @@ def bestpartner_decode(buf):
 # Uniform codec objects + the registry
 # ===========================================================================
 class Codec:
-    def __init__(self, name, encode, decode, meta, family="", desc=""):
+    def __init__(self, name, encode, decode, meta, family="", desc="",
+                 retired=False, retired_reason=""):
         self.name = name
         self.encode = encode
         self.decode = decode
@@ -410,6 +411,17 @@ class Codec:
         self.family = family
         self.desc = desc
         self.cost = cost.score(meta)
+        # `retired` marks a codec that has been conclusively verified
+        # Pareto-dominated on REAL data (never for merely "not the best" --
+        # a non-dominated but marginal codec, like a best-of-N Pareto corner,
+        # stays active). Retired codecs are NEVER deleted -- the code and its
+        # self-test coverage stay forever for reproducibility and so the
+        # verdict can be re-checked -- they are just excluded from the default
+        # bench.py/leaderboard sweep so they stop being re-benchmarked and
+        # re-reported every cycle. Set `retired_reason` to the experiment
+        # record / cycle that made the call.
+        self.retired = retired
+        self.retired_reason = retired_reason
 
 
 def _wrap_embedded(predictor, cross):
@@ -493,14 +505,25 @@ _register(Codec("LMS+Rice+xchan", _e, _d, CodecMeta(
     lookahead_samples=ec.BLOCK, block_size=ec.BLOCK, notes=_XCHAN_NOTE),
     family="cross-channel", desc="LMS + grid-neighbour decorrelation (current best)"))
 
-# NEW candidate: backward-adaptive per-block cross-channel beta (no side-info,
-# fully causal -> lookahead 0, unlike the whole-signal +xchan variants above).
+# RETIRED (cycle 1, compression-cycle-2026-07-08): backward-adaptive per-block
+# cross-channel beta -- no side-info, fully causal -> lookahead 0, unlike the
+# whole-signal +xchan variants above. Kept registered (bit-exact, embedded_ok,
+# double-verified) for reproducibility, but excluded from the default
+# bench.py/leaderboard sweep: two independent verifiers confirmed it is
+# Pareto-dominated by LMS+Rice+xchan on real otb_hdsemg_vl (2.13x/cost 0.065
+# vs the incumbent's 2.14x/cost 0.057 -- worse ratio AND higher cost). See
+# experiments/001_lms_rice_xchan_adaptive.md for the full record.
 _register(Codec("LMS+Rice+xchan_adaptive", xadapt_encode, xadapt_decode, CodecMeta(
     integer_only=True, enc_ops=_LMS_OPS + _XCHAN_OPS + _XADAPT_XTRA,
     dec_ops=_LMS_OPS + _XCHAN_OPS + _XADAPT_XTRA,
     state_bytes_per_ch=_XADAPT_STATE, causal=True, lookahead_samples=0,
     block_size=XADAPT_BLOCK, notes=_XADAPT_NOTE), family="cross-channel",
-    desc="LMS + grid-neighbour decorrelation, backward-adaptive per-block gain"))
+    desc="LMS + grid-neighbour decorrelation, backward-adaptive per-block gain",
+    retired=True,
+    retired_reason="Pareto-dominated by LMS+Rice+xchan on real otb_hdsemg_vl "
+                    "(2.13x/0.065 vs 2.14x/0.057); double-verified PROMOTE on "
+                    "correctness/embeddability only, never on ratio. "
+                    "experiments/001_lms_rice_xchan_adaptive.md, cycle 2026-07-08."))
 
 # NEW candidate: best-partner cross-channel selection (this cycle).
 # Encode adds, on top of LMS+xchan, a per-channel scan over <=4 causal-neighbour
@@ -533,8 +556,17 @@ _register(Codec("fixed0-3+Rice", fixed_encode, fixed_decode, CodecMeta(
     desc="FLAC fixed predictors ord 0-3, best-per-block + Rice"))
 
 
-def list_codecs():
-    return list(REGISTRY.values())
+def list_codecs(include_retired=False):
+    """Codecs for the default bench.py/search.py sweep and the leaderboard.
+    Retired codecs (Pareto-dominated on real data, per a verifier's audit) are
+    excluded by default so they stop being re-benchmarked and re-reported every
+    cycle -- pass include_retired=True to re-check one explicitly (e.g. to
+    reproduce an old verdict, or re-audit after a shared primitive changes)."""
+    return [c for c in REGISTRY.values() if include_retired or not c.retired]
+
+
+def list_retired():
+    return [c for c in REGISTRY.values() if c.retired]
 
 
 # ===========================================================================
@@ -549,20 +581,27 @@ def _selftest():
     x[5, 800:820] += 500                               # a spike burst
     x[6, 800:820] += 300
 
-    print(f"registry self-test on random int16 [{C} x {N}], {len(REGISTRY)} codecs\n")
+    # Bit-exactness is checked for EVERY codec ever registered, retired or not
+    # -- retirement means "excluded from the default bench/leaderboard sweep",
+    # never "excused from correctness." Nothing is deleted or untested.
+    all_codecs = list_codecs(include_retired=True)
+    n_retired = len(list_retired())
+    print(f"registry self-test on random int16 [{C} x {N}], {len(all_codecs)} codecs"
+          f" ({n_retired} retired, excluded from the default sweep)\n")
     print(f"{'codec':<20}{'ratio':>7}{'round-trip':>12}{'emb_ok':>8}"
-          f"{'neural':>8}{'cost':>8}")
-    print("-" * 63)
+          f"{'neural':>8}{'cost':>8}  status")
+    print("-" * 71)
     all_ok = True
-    for c in list_codecs():
+    for c in all_codecs:
         blob = c.encode(x, cols=cols)
         y = c.decode(blob)
         ok = np.array_equal(x, y)
         all_ok &= ok
         ratio = x.nbytes / len(blob)
+        status = "RETIRED" if c.retired else ""
         print(f"{c.name:<20}{ratio:>6.2f}x{('OK' if ok else 'FAIL!'):>12}"
               f"{('OK' if c.cost.embedded_ok else 'no'):>8}"
-              f"{('OK' if c.cost.neural_ok else '-'):>8}{c.cost.cost:>8.3f}")
+              f"{('OK' if c.cost.neural_ok else '-'):>8}{c.cost.cost:>8.3f}  {status}")
         assert ok, f"round-trip mismatch for {c.name}"
     assert all_ok
     print("\nregistry self-test: ALL round-trips bit-exact")
