@@ -11,12 +11,20 @@ replaces them. Plan and non-negotiables live in
 |---|---|---|
 | `00_STATE.md` | Stage 0 orientation + current ratio bar (human gate) | done |
 | `01_STAGE1.md` | Stage 1 record (registry + cost model) | done |
+| `04_STAGE4.md` | Stage 4 record (search + ablations) | done |
 | `embedded_cost.py` | `embedded_ok` hard gate + continuous Pareto cost | done |
 | `registry.py` | uniform `encode`/`decode` + metadata over every codec | done |
-| `datasets.py` | Stage 2 corpus loaders (CapgMyo, CEMHSEY, neural) | todo |
-| `search.py` | Stage 4 hill-climb over the design space | todo |
-| `survey.py` | Stage 5 → `SURVEY.md` (proposes only) | todo |
-| `LEADERBOARD.md` | Stage 6 best-per-category + Pareto front | todo |
+| `datasets.py` | Stage 2 corpus loaders (Hyser, OTB, CapgMyo, CEMHSEY, synthetic) | done |
+| `bench.py` | Stage 3 registry-driven benchmark → `results/*.csv` | done |
+| `search.py` | Stage 4 hill-climb over the design space | done |
+| `../SURVEY.md` | Stage 5 survey — cost-filtered ranked candidates (proposes only) | done, refreshed each cycle |
+| `LEADERBOARD.md` | Stage 6 **current-snapshot** best-per-category + Pareto front (overwritten each cycle) | done |
+| `CYCLE_LOG.md` | **append-only** one-row-per-cycle index — read this to see progress *over time* | done |
+| `../experiments/NNN_slug.md` | full per-cycle record (hypothesis, commands, verifier verdicts) | done |
+
+**Where to look for progress across cycles:** `CYCLE_LOG.md` (index) →
+`../experiments/NNN_slug.md` (detail for one cycle). `LEADERBOARD.md` only shows the
+*current* best; it is not a history.
 
 ## Run
 
