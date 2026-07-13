@@ -315,6 +315,22 @@ _XCHAN_STATE = 6
 _XCHAN_NOTE = ("software impl derives per-channel beta over the whole signal; "
                "embeddable realization computes beta per block (look-ahead=block)")
 
+# xchan_adaptive (backward-adaptive realization): on top of the +xchan per-sample
+# work (1 mul + 1 shift + 1 sub), each block-channel accumulates two running
+# dot-products (<x_c,x_p> and <x_p,x_p>, ~2 macs/sample-ch) and does ONE rounded
+# integer divide at the block boundary (amortised ~divide/BLOCK). The decoder
+# RECOMPUTES the same beta (it is not transmitted), so dec_ops == enc_ops here.
+_XADAPT_XTRA = 3   # 2 dot-product macs + amortised block divide, per sample-ch
+# state/ch: order-8 LMS (40) + current beta int16 (2) + two int64 block
+# accumulators for the running dot-products (16).
+_XADAPT_STATE = _LMS_STATE + 18
+_XADAPT_NOTE = (
+    "backward-adaptive per-block cross-channel gain: beta[block i] is the "
+    "integer least-squares ratio <x_c,x_p>/<x_p,x_p> over the PREVIOUS block's "
+    "already-reconstructed samples (block 0 -> beta=0). Fully causal, "
+    "lookahead=0, and NO beta side-info -- the decoder recomputes it. Replaces "
+    "the whole-signal float beta + header side-info of the +xchan variants.")
+
 REGISTRY = {}
 
 

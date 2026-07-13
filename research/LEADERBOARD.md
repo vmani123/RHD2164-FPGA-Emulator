@@ -55,6 +55,19 @@ all of which the embedded codec beats.
   carries little inter-electrode redundancy). CapgMyo is the honest **negative
   control**: the harness does *not* manufacture a win where the physics isn't there.
 - Every real ratio (best 2.14×) is ≪ the 6× leak ceiling → no degenerate data.
+- **Cycle 1 (2026-07-08) — new candidate `LMS+Rice+xchan_adaptive`, NOT promoted as a
+  new best (Pareto-dominated).** On real `otb_hdsemg_vl` it measures **2.13×** at cost
+  0.065, against the incumbent `LMS+Rice+xchan`'s 2.14× at cost 0.057 — a −0.48% ratio
+  give-up **and** higher cost, so per non-negotiable #2 (rank on the Pareto front) it
+  does not join the front and `LMS+Rice+xchan` remains the recorded best-ratio
+  embeddable codec on every real set, unchanged. It is kept, registered (bit-exact,
+  double-verified `embedded_ok`), because it closes a real gap: the incumbent's 2.14×
+  depends on a float whole-signal beta computed offline over the whole recording and
+  shipped as header side-info — not actually producible on-node — whereas the new
+  codec's beta is genuinely causal (look-ahead = 0) and needs **zero side-info** (the
+  decoder recomputes it from the previous already-reconstructed block). See
+  `experiments/001_lms_rice_xchan_adaptive.md` for the full record, including the
+  ranked next hypotheses aimed at recovering the give-up.
 
 ## Cycle 2026-07-10 — best-partner cross-channel selection (SURVEY rec #2)
 

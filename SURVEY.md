@@ -39,6 +39,15 @@ _Cycle log (what's already been tried, so don't re-recommend it):_
 | Integer discrete flows (IDF), L3C, learned entropy models | learned lossless; float/GPU, no streaming budget — track for offline baselines only |
 | Convolutional autoencoder + lossless residual | near-lossless core + residual; float, disqualified on the FPGA target |
 | VAE-DCT / neural context models | research interest; fails integer + latency gates today |
+| Compressive on-chip AP recording (IEEE TBME 11183845 / bioRxiv 2025.09.26.678698) | **LOSSY** — requantise + mutual-information selective sampling; ~1098× paper-reported (unverified here). **DISQUALIFIED** by non-negotiable #1 (lossless-only); listed for the record / offline baseline only |
+| TSCom-Bench + chained lightweight neural predictors (arXiv 2509.21002 / 2604.15472) | learned-lossless time-series predictors; float/GPU, no streaming budget — watch-list only |
+| GPU adaptive lossless FP framework (arXiv 2511.04140) | offline/GPU floating-point pipeline; no integer streaming budget — watch-list only |
+| Predictability-aware multichannel time-series (arXiv 2506.00614) | lossy + neural + non-causal; disqualified by lossless-only + causal gates, tracked for record |
+
+**Reference-only (not a contender):** streaming floating-point time-series compressors
+(Elf / SElf / Chimp / Gorilla, surveyed in arXiv 2510.07015) are XOR-of-float oriented and a
+poor fit for int16 biosignals, where Rice/Golomb already dominates. Useful as a baseline bar,
+not as a candidate on this target.
 
 ## Recommendations — next codec to implement THIS cycle (embeddable, by expected gain/cost)
 
@@ -88,3 +97,10 @@ remains a contender for a later cycle if best-partner selection under-delivers.
 - [An FPGA Implementation of a Lossless Electrocardiogram Compressor based on Prediction and Golomb-Rice Coding](https://www.researchgate.net/publication/239580536_An_FPGA_Implementation_of_a_Lossless_Electrocardiogram_Compressor_based_on_Prediction_and_Golomb-Rice_Coding)
 - [An FPGA-Based LOCO-ANS Implementation for Lossless and Near-Lossless Image Compression (MDPI Electronics 2021)](https://www.mdpi.com/2079-9292/10/23/2934)
 - [FPGA-based JPEG-LS encoder for onboard real-time lossless image compression](https://www.researchgate.net/publication/279513369_FPGA-based_JPEG-LS_encoder_for_onboard_real-time_lossless_image_compression)
+- [Channel-clustering reference selection for multichannel EEG compression (ScienceDirect S1746809416301252)](https://www.sciencedirect.com/science/article/abs/pii/S1746809416301252)
+- [TSCom-Bench: benchmarking learned lossless time-series compression (arXiv 2509.21002)](https://arxiv.org/abs/2509.21002)
+- [Chained lightweight neural predictors for learned-lossless time-series (arXiv 2604.15472)](https://arxiv.org/abs/2604.15472)
+- [Survey of streaming floating-point time-series compressors — Elf/SElf/Chimp/Gorilla (arXiv 2510.07015)](https://arxiv.org/abs/2510.07015)
+- [GPU adaptive lossless floating-point compression framework (arXiv 2511.04140)](https://arxiv.org/abs/2511.04140)
+- [Predictability-aware multichannel time-series compression (arXiv 2506.00614)](https://arxiv.org/abs/2506.00614)
+- [Compressive on-chip action-potential recording (IEEE TBME 11183845)](https://ieeexplore.ieee.org/document/11183845) · [bioRxiv 2025.09.26.678698](https://www.biorxiv.org/content/10.1101/2025.09.26.678698)
