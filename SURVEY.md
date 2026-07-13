@@ -7,12 +7,12 @@ spatial correlation). **This file PROPOSES only** — no measured ratios, no cod
 edits (non-negotiable #4). Watch-list methods are never promoted without explicit
 human approval. Seeds `compression_spec/candidates.md`.
 
-_Compiled: 2026-07-08 · web search (US) + candidates.md._
+_Compiled: 2026-07-06 · refreshed 2026-07-10 (cycle 2026-07-10) · web search (US) + candidates.md._
 
-_2026 literature scan (this compile): no NEW embeddable lossless multichannel-biosignal
-codec has surfaced since the 2026-07-06 compile that supersedes the flagged next step.
-Recent activity is either lossy or float/neural (see watch-list / reference-bar / disqualified),
-so the top implement-now pick is unchanged — now scoped as a new registry codec (per-block beta)._
+_Cycle log (what's already been tried, so don't re-recommend it):_
+- _`LMS+Rice+xchan` (order-8, whole-signal float beta) is the incumbent real best (OTB 2.14×, cost 0.057; Hyser 1.47×)._
+- _Cycle 1 (branch `compression-cycle-2026-07-08`, unmerged) implemented **`LMS+Rice+xchan_adaptive`** = backward-adaptive per-block **integer** beta replacing the offline float beta. Verified bit-exact/embeddable but **dominated**: OTB 2.13× at cost 0.065 (−0.48% ratio, +cost) vs the incumbent → NOT promoted. Do not re-implement this identically. Its open follow-ups (untried): pair adaptive-beta with **order-4** LMS (may recover the gap AND cut cost < 0.057 = a real Pareto win); sweep adaptation block size 128/256/512; two-neighbour (up+left) front-end._
+- _Untried from prior SURVEY recs: **best-partner / multi-neighbour channel selection** (#2), **rANS residual back-end** (#3), **integer inter-channel lifting** (#4)._
 
 ## Verdict key
 - **embeddable** — integer, causal, bounded state/look-ahead, fits the sEMG budget
@@ -25,12 +25,12 @@ so the top implement-now pick is unchanged — now scoped as a new registry code
 | # | method | why it may beat per-channel FLAC | verdict | key cost caveat |
 |---|---|---|---|---|
 | 1 | **Cross-channel residual decorrelation (MPEG-4 ALS multichannel coding)** | Adaptively weighted subtraction of a *reference channel's residual* from the coding channel's residual — removes shared, temporally-unpredictable spatial content a per-channel predictor cannot. This is exactly the `+xchan` lever, and the literature's cross-correlation-of-residuals estimator matches our achieved +17.5% real gain. | **embeddable** (already our best) | beta/weight must be per-block, not whole-signal (our current port caveat) |
-| 2 | **Best-partner / multi-neighbour channel pairing** | Instead of a fixed grid neighbour, pick the most-correlated partner (or a small set) per channel — captures anisotropic muscle/propagation structure a fixed spanning tree misses. Generalises to per-cluster centroid references per the EEG channel-clustering reference-selection literature (ScienceDirect S1746809416301252), which reinforces its priority. | **embeddable** | O(C·k) correlation scan per block; send partner id (log2 C bits) side-info |
+| 2 | **Best-partner / multi-neighbour channel pairing (ALS low-complexity joint coding)** | Instead of a fixed grid parent, pick the most-correlated partner per channel and only subtract when it pays. Choi et al. (Sensors 2014) give the *integer, causal* recipe: gate joint coding by the **normalized residual cross-correlation** DF = \|Σe₁e₂\|/√(Σe₁²·Σe₂²) ≥ ~0.45, and pick the reference channel by **lowest AbsMean residual** (smallest Rice-k) — both are byproducts of prediction, no duplicate entropy pass. Directly attacks the fixed-spanning-tree limit the LEADERBOARD flags; OTB grid neighbour \|corr\| 0.73–0.79 means several near-equal candidates the fixed parent may not pick. | **embeddable** | O(C·k) correlation scan per block over a *bounded* neighbour set (4-neighbourhood, not all C); send partner id (log2 k bits) + 1 gate bit per block as side-info |
 | 3 | **Integer inter-channel decorrelation (lifting / matrixing, ALS & Dolby TrueHD/MLP)** | Reversible integer lifting across channels generalises single-neighbour subtraction to a multi-tap spatial transform; fully lossless by construction. | **embeddable** | keep the matrix small + fixed-point; full adaptive matrix is borderline |
 | 4 | **FLAC fixed polynomial predictors (ord 0–3), best-per-block + Rice** | Cheapest possible upgrade over order-1 delta; near-LMS ratio at a fraction of the compute. | **embeddable** (implemented: `fixed0-3+Rice`, on the Pareto front) | none material — this is the value pick |
 | 5 | **NLMS / leaky / higher-order sign-LMS + Rice (ALS RLS-LMS direction)** | Normalised/leaky adaptation tracks non-stationary EMG better than plain sign-sign LMS; still one-pass. | **embeddable** | our search shows order>4 *hurts* real HD-sEMG — keep order small |
-| 6 | **Range / arithmetic / rANS back-end on residuals (vs. Rice)** | Sub-Golomb redundancy on low-entropy residual blocks; JPEG-LS-style context modelling. | **borderline** | range/arith division & renorm is costlier than Rice; rANS is the FPGA-friendlier variant |
-| 7 | **JPEG-LS / LOCO-I 2D over the electrode-grid × time image** | Median (MED/LOCO) predictor + context modelling + Golomb exploits 2D spatial structure losslessly; proven low-complexity with mature FPGA encoders. | **borderline** | context state per gradient bucket × channel; verify it beats #1 on grids, not just images |
+| 6 | **rANS / tANS back-end on residuals (vs. Rice)** | Rice is optimal only for exactly-geometric residuals; a table-driven (t)ANS coder captures the sub-Golomb redundancy on real EMG residual blocks whose histogram deviates from geometric. Static per-block frequency table → deterministic, integer. | **borderline** | tANS is the FPGA-friendly variant (LOCO-ANS: table lookups + renorm, no per-symbol division); needs a per-block freq table (side-info) and reverse-order encode buffer — cost may exceed Rice's for the marginal bits gained; head-to-head vs Rice on the *same* predictor decides |
+| 7 | **JPEG-LS / LOCO-I(-ANS) 2D over the electrode-grid × time image** | Median (MED/LOCO) predictor + context modelling + Golomb/ANS exploits 2D spatial structure losslessly; LOCO-ANS (Electronics 2021) is a proven low-complexity HLS/FPGA encoder. | **borderline** | context state per gradient bucket × channel; verify it beats #1/#2 on a 5×13 grid, not just natural images |
 
 ## Watch-list (survey only — DO NOT promote without human approval)
 
@@ -49,41 +49,48 @@ so the top implement-now pick is unchanged — now scoped as a new registry code
 poor fit for int16 biosignals, where Rice/Golomb already dominates. Useful as a baseline bar,
 not as a candidate on this target.
 
-## Recommendations — next codecs to implement (embeddable, by expected gain/cost)
+## Recommendations — next codec to implement THIS cycle (embeddable, by expected gain/cost)
 
-1. **Per-block beta for `+xchan`** (this cycle's top implement-now pick) — replace the
-   whole-signal cross-channel gain (`cross_betas()` derives beta once over the entire
-   signal and ships it once) with a **per-block** estimate, as a **NEW registry codec**
-   (e.g. `lms4s8+x6/b512-pb`) rather than an in-place edit of the winning family. Two
-   streaming-legal variants to bench: **(a) forward-adaptive** — beta from the current
-   B-sample block, quantised to int16 and shipped as per-block side-info (one-block
-   look-ahead); **(b) backward-adaptive** — beta derived from the previous block's already-
-   reconstructed samples, so it carries **zero side-info** and the decoder recomputes it
-   identically (fully causal, ALS-style). This keeps the dominant cross-channel spatial
-   lever (which FLAC lacks) while making it non-stationarity-tracking and streaming-legal;
-   per-block / backward-adaptive weight estimation is precisely the MPEG-4 ALS joint-coding
-   approach, so it should retain the spatial gain rather than lose it. Block size B trades
-   tracking vs. overhead and MUST be chosen by `research/bench.py` + `research/search.py`;
-   treat no ratio as decided until the harness reports `embedded_ok` and a Pareto point,
-   and assert a bit-exact round-trip (the backward-adaptive form requires encode/decode to
-   mirror the same integer statistics exactly). Nothing embeddable superseded this pick.
-2. **Best-partner channel selection** (#2) — one correlation scan per block picks
-   the parent; small side-info. Directly attacks the fixed-spanning-tree limitation
-   the LEADERBOARD flags. Expected to add a few % over the fixed grid neighbour.
-3. **rANS residual back-end** (#6) — head-to-head vs. Rice on the same predictor;
-   FPGA-friendly, may recover the last fraction of a bit per residual.
-4. **Integer inter-channel lifting** (#3, small fixed matrix) — generalise
-   single-neighbour subtraction to a 2–3-tap spatial lift; test whether the extra
-   taps beat best-partner selection at acceptable cost.
+Per-block beta is now *done* (cycle 1's `+xchan_adaptive`), so it drops off this
+list. The spatial lever still dominates temporal sophistication (~70× on real
+Hyser ablation), so the top bet stays spatial — but the *fixed parent*, not the
+beta, is now the binding limitation.
 
-Order reflects expected ratio gain per unit embedded cost for THIS device: the
-spatial lever (#1→#2→#4) dominates temporal-predictor sophistication, matching
-both the ALS literature and our own ablation (cross-channel ≈ 18× any temporal
-knob on real HD-sEMG).
+1. **★ TOP PICK — Best-partner channel selection (#2).** Untried, and the highest-
+   payoff *new* lever. Give each channel a small causal candidate set (its 4-grid
+   neighbours), pick the reference by lowest AbsMean residual, and gate the subtract
+   per block by the normalized residual-cross-correlation DF (Choi et al.'s integer
+   recipe). This is a genuinely new mechanism, not a refinement of a known result;
+   it attacks exactly the fixed-spanning-tree limit the LEADERBOARD flags, and on
+   OTB's near-isotropic neighbour correlations (0.73–0.79) the fixed parent is
+   demonstrably not always the best partner. Reuse the existing `+xchan` subtract;
+   only the parent-selection + gate logic is new. Side-info is tiny (log2 4 + 1 bit
+   per block). Expected: a few % over the fixed grid neighbour, at bounded cost.
+2. **Adaptive-beta + order-4 LMS** (cycle 1 follow-up (a)). The safe Pareto-refinement
+   bet: order-4 already beats order-8 on real data, and pairing it with cycle 1's
+   side-info-free integer beta may recover the −0.48% give-up **and** push cost
+   below the incumbent 0.057 — turning cycle 1's dominated point into a real Pareto
+   win that also closes the port caveat. Lower ceiling than #1 (best case ≈ incumbent
+   ratio at lower cost), but low-risk and RTL-ready. Not a re-implement of cycle 1:
+   the order-4 pairing + block-size sweep (128/256/512) is the new part.
+3. **rANS/tANS residual back-end** (#6). Head-to-head vs. Rice on the *same*
+   predictor. FPGA-friendly (LOCO-ANS-style tANS: table lookups + renorm, no
+   per-symbol division), may recover the last fraction of a bit on non-geometric
+   residual blocks — but payoff is uncertain and the per-block freq table + reverse
+   encode buffer may cost more than the bits it saves. Worth a bench, not the build.
+
+Order reflects expected ratio gain per unit embedded cost for THIS device on the
+real OTB set: a new spatial lever (#1) > a Pareto refinement that also unblocks RTL
+(#2) > an uncertain back-end swap (#3). Integer inter-channel lifting (table row 3)
+remains a contender for a later cycle if best-partner selection under-delivers.
 
 ## Sources
 
-- [A Lossless Multichannel Bio-Signal Compression Based on Low-Complexity Joint Coding Scheme for Portable Medical Devices (PMC4208236)](https://pmc.ncbi.nlm.nih.gov/articles/PMC4208236/)
+- [Choi et al., A Lossless Multichannel Bio-Signal Compression Based on Low-Complexity Joint Coding Scheme for Portable Medical Devices (Sensors 2014, PMC4208236)](https://pmc.ncbi.nlm.nih.gov/articles/PMC4208236/) — the integer joint-coding **decision factor** (normalized residual cross-correlation, threshold ~0.45) and **AbsMean reference-channel selection** driving rec #1. Reports 20.72% complexity cut vs ALS reference at parity ratio; +11.92% vs single-channel; ECG 3.41, EEG 3.65 (paper-reported, unverified here).
+- [Use of the MPEG-4 ALS Architecture and Inter-channel Prediction for Multi-channel ECG Coding](https://www.researchgate.net/publication/261096537_Use_of_the_MPEG-4_ALS_Architecture_and_Inter-channel_Prediction_for_Multi-channel_ECG_Coding) — ALS inter-channel prediction applied to multichannel biosignals; two cross-prediction filter types; ~3% inter- over intra-channel gain (paper-reported, unverified here).
+- [LOCO-ANS: An Optimization of JPEG-LS Using an Efficient and Low-Complexity Coder Based on ANS (IEEE Access 2021)](https://ieeexplore.ieee.org/document/9499046/) — tANS back-end replacing Golomb (rec #6/#7 basis).
+- [An FPGA-Based LOCO-ANS Implementation Using High-Level Synthesis (Electronics 2021, MDPI)](https://www.mdpi.com/2079-9292/10/23/2934) + [HLS coder source](https://github.com/hpcn-uam/LOCO-ANS-HW-coder) — evidence tANS is FPGA-mappable (table lookups + renorm, no per-symbol division), 40.5 MPix/s Zynq-7020.
+- [Low-cost ANS encoder for lossless data compression in FPGAs (2024)](https://www.researchgate.net/publication/379363486_Low-cost_ANS_encoder_for_lossless_data_compression_in_FPGAs) — streaming-rANS with parameters tuned to cut FPGA resource use; supports the rANS-is-embeddable-back-end claim (rec #6).
 - [The MPEG-4 Audio Lossless Coding (ALS) Standard — Technology and Applications](https://www.academia.edu/68025436/The_MPEG_4_Audio_Lossless_Coding_ALS_Standard_Technology_and_Applications)
 - [A Multichannel Linear Prediction Method for the MPEG-4 ALS Compliant Encoder (IEEE)](https://ieeexplore.ieee.org/document/4393008/)
 - [An efficient lossless compression of multichannel time-series signals by MPEG-4 ALS](https://www.researchgate.net/publication/224559434_An_efficient_lossless_compression_of_multichannel_time-series_signals_by_MPEG-4_ALS)

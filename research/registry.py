@@ -147,129 +147,127 @@ def fixed_decode(buf):
 
 
 # ===========================================================================
-# NEW candidate: backward-adaptive per-block cross-channel beta.
+# NEW candidate: best-partner cross-channel selection + LMS + Rice.
 # ---------------------------------------------------------------------------
-# The existing +xchan front-end (embedded_codec.cross_betas/forward/inverse)
-# derives ONE gain `beta` per channel over the WHOLE recording (a float
-# least-squares ratio) and ships it as header side-info -- i.e. it needs the
-# whole signal offline to pick beta. This variant makes the gain (i) track
-# non-stationarity and (ii) removes the look-ahead AND the side-info:
-#
-#   * beta for block i is (re)estimated from the PREVIOUS block's ALREADY-
-#     reconstructed samples of the channel and its grid parent, using
-#     integer-only fixed-point arithmetic (two dot-products + one rounded
-#     integer divide per block-channel). Because the reconstruction is lossless,
-#     the parent/child samples the decoder has after block i-1 are bit-identical
-#     to the encoder's, so the decoder recomputes the SAME beta causally and NO
-#     beta is transmitted.
-#   * Block 0 bootstraps with beta = 0 (no prior block exists yet), so the first
-#     block is coded as if xchan were off; the gain then adapts each block.
-#
-# Everything downstream (grid parent tree, order-8 sign-sign LMS, adaptive
-# Golomb-Rice) is identical to the current best codec "LMS+Rice+xchan"; only the
-# gain-estimation is swapped from whole-signal side-info to backward-adaptive.
+# The incumbent +xchan front-end subtracts a SINGLE fixed grid parent (left, or
+# up for the first column) with an optimal integer gain. On a near-isotropic
+# electrode grid the fixed parent is demonstrably not always the best-correlated
+# neighbour (LEADERBOARD flags this), so here we let each channel CHOOSE its
+# partner from a bounded set of causally-available neighbours -- all with grid
+# index < g, so the decoder can reconstruct in channel order:
+#     left   = g-1        (col > 0)
+#     up     = g-cols     (row > 0)
+#     up-left= g-cols-1   (row > 0 and col > 0)
+#     up-right=g-cols+1   (row > 0 and col < cols-1)
+# For each candidate we derive the optimal integer gain beta (rounded integer
+# least-squares, no float in the transform) and estimate the Rice-coded length of
+# the resulting cross-residual; we keep the partner (or NONE) with the fewest
+# estimated bits. The chosen (parent, beta) pair per channel is tiny explicit
+# side-info (two int16 / channel) carried in the format, so encoder and decoder
+# use identical, causally-available data. Everything downstream (LMS temporal
+# predictor + adaptive Rice) is reused verbatim from embedded_codec.
 # ===========================================================================
-XADAPT_MAGIC = 0x5841        # 'XA'
-XADAPT_BLOCK = ec.BLOCK      # cross-channel adaptation block (samples); tunable
-XADAPT_SHIFT = ec.CROSS_SHIFT  # fixed-point scale for beta (matches the family)
+BP_MAGIC = 0x5042   # 'BP'
+BP_SHIFT = ec.CROSS_SHIFT   # same fixed-point gain scale as the incumbent xchan
 
 
-def _int_beta(num, den, shift=XADAPT_SHIFT):
-    """Integer-only fixed-point gain ~= round(num/den * 2**shift) for den > 0,
-    clamped to int16. No float anywhere; deterministic and therefore identical
-    on encode and decode. `den` is a sum of squares so it is always >= 0."""
-    d = int(den)
-    if d <= 0:
+def _bp_candidates(g, cols, C):
+    """Causally-available grid neighbours of channel g (all index < g)."""
+    r, c = divmod(g, cols)
+    cands = []
+    if c > 0:
+        cands.append(g - 1)               # left
+    if r > 0:
+        cands.append(g - cols)            # up
+    if r > 0 and c > 0:
+        cands.append(g - cols - 1)        # up-left
+    if r > 0 and c < cols - 1:
+        cands.append(g - cols + 1)        # up-right
+    return cands
+
+
+def _bp_opt_beta(xg, xp, shift):
+    """Rounded integer least-squares gain beta ~ <xg,xp>/<xp,xp> * (1<<shift).
+    Integer-only (rounded division), clamped to int16 side-info range."""
+    denom = int((xp * xp).sum())
+    if denom <= 0:
         return 0
-    numer = int(num) << shift
-    if numer >= 0:
-        b = (numer + d // 2) // d          # symmetric round-half-up
+    num = int((xg * xp).sum()) << shift
+    if num >= 0:
+        b = (num + denom // 2) // denom
     else:
-        b = -(((-numer) + d // 2) // d)
-    if b > 32767:
-        return 32767
-    if b < -32768:
-        return -32768
-    return b
+        b = -(((-num) + denom // 2) // denom)
+    return max(-32768, min(32767, b))
 
 
-def _beta_from_block(xc_blk, xp_blk, shift=XADAPT_SHIFT):
-    """Backward-adaptive gain from ONE already-reconstructed block: the
-    least-squares ratio <x_c, x_p> / <x_p, x_p>, integer/fixed-point. Identical
-    call on both sides guarantees the same beta bit-for-bit."""
-    xc = xc_blk.astype(np.int64)
-    xp = xp_blk.astype(np.int64)
-    num = int((xc * xp).sum())
-    den = int((xp * xp).sum())
-    return _int_beta(num, den, shift)
+def _bp_score(res1d):
+    """Estimated Rice-coded length (bits) of a residual channel at its best k."""
+    u = ec.zigzag(np.asarray(res1d, np.int64))
+    k = ec._best_k(u)
+    return int((u >> np.uint64(k)).sum()) + int(u.size) * (1 + k)
 
 
-def _xadapt_forward(x, parent, B=XADAPT_BLOCK, shift=XADAPT_SHIFT):
-    """Cross-channel decorrelation with backward-adaptive per-block gain.
-    y[c,t] = x[c,t] - ((beta[c,block(t)] * x[parent,t]) >> shift), beta derived
-    from the previous block. Operates on the RAW signal, which the decoder
-    reconstructs bit-exactly, so the betas match."""
-    x = x.astype(np.int64)
+def _bp_select(x, cols):
+    """Per-channel best-partner selection. Returns (xt, parents, betas) where
+    xt[g] is the cross-decorrelated channel and parents/betas are int64 side-info
+    (parent = -1 means the channel is coded as-is)."""
     C, N = x.shape
-    y = x.copy()
-    nblocks = (N + B - 1) // B
-    for c in range(C):
-        p = parent[c]
-        if p < 0:                          # root channel: no parent to subtract
-            continue
-        beta = 0                           # block-0 bootstrap
-        for i in range(nblocks):
-            s, e = i * B, min((i + 1) * B, N)
-            if i > 0:
-                beta = _beta_from_block(x[c, (i - 1) * B:i * B],
-                                        x[p, (i - 1) * B:i * B], shift)
-            y[c, s:e] = x[c, s:e] - ((beta * x[p, s:e]) >> shift)
-    return y
+    x = x.astype(np.int64)
+    parents = np.full(C, -1, np.int64)
+    betas = np.zeros(C, np.int64)
+    xt = x.copy()
+    for g in range(C):
+        best_bits = _bp_score(x[g])       # option: no cross-channel subtract
+        best_p, best_b, best_y = -1, 0, x[g]
+        for p in _bp_candidates(g, cols, C):
+            b = _bp_opt_beta(x[g], x[p], BP_SHIFT)
+            if b == 0:
+                continue
+            y = x[g] - ((b * x[p]) >> BP_SHIFT)
+            bits = _bp_score(y)
+            if bits < best_bits:
+                best_bits, best_p, best_b, best_y = bits, p, b, y
+        parents[g] = best_p
+        betas[g] = best_b
+        xt[g] = best_y
+    return xt, parents, betas
 
 
-def _xadapt_inverse(y, parent, B=XADAPT_BLOCK, shift=XADAPT_SHIFT):
-    """Invert _xadapt_forward. parent[c] < c so the parent channel is fully
-    reconstructed before c; within a channel, block i's beta is recomputed from
-    the already-reconstructed block i-1 -- exactly mirroring the encoder."""
-    y = y.astype(np.int64)
-    C, N = y.shape
-    x = y.copy()                           # root channels already correct
-    nblocks = (N + B - 1) // B
-    for c in range(C):
-        p = parent[c]
-        if p < 0:
-            continue
-        beta = 0
-        for i in range(nblocks):
-            s, e = i * B, min((i + 1) * B, N)
-            if i > 0:
-                beta = _beta_from_block(x[c, (i - 1) * B:i * B],
-                                        x[p, (i - 1) * B:i * B], shift)
-            x[c, s:e] = y[c, s:e] + ((beta * x[p, s:e]) >> shift)
+def _bp_inverse(xt, parents, betas):
+    """Invert the best-partner front-end. parents[g] < g so the parent channel is
+    already reconstructed when we reach g."""
+    C, N = xt.shape
+    x = xt.astype(np.int64).copy()
+    for g in range(C):
+        p = int(parents[g])
+        if p >= 0:
+            x[g] = xt[g] + ((int(betas[g]) * x[p]) >> BP_SHIFT)
     return x
 
 
-def xadapt_encode(x, cols=16):
+def bestpartner_encode(x, cols=16):
     x = np.asarray(x, np.int64)
     C, N = x.shape
-    parent = ec.grid_parents(C, cols)
-    y = _xadapt_forward(x, parent)
-    res = ec.lms_forward(y)                # order-8 sign-sign LMS (same as family)
+    xt, parents, betas = _bp_select(x, cols)
+    res = ec.lms_forward(xt)
     body = b"".join(ec.rice_encode_1d(res[c]) for c in range(C))
-    hdr = struct.pack("<HHII", XADAPT_MAGIC, cols, C, N)  # NO beta side-info
-    return hdr + body
+    hdr = struct.pack("<HHII", BP_MAGIC, cols, C, N)
+    side = parents.astype("<i2").tobytes() + betas.astype("<i2").tobytes()
+    return hdr + side + body
 
 
-def xadapt_decode(buf):
+def bestpartner_decode(buf):
     magic, cols, C, N = struct.unpack_from("<HHII", buf, 0)
-    assert magic == XADAPT_MAGIC, "bad xadapt magic"
+    assert magic == BP_MAGIC, "bad best-partner codec magic"
     off = 12
+    parents = np.frombuffer(buf, "<i2", C, off).astype(np.int64); off += 2 * C
+    betas = np.frombuffer(buf, "<i2", C, off).astype(np.int64); off += 2 * C
     res = np.empty((C, N), np.int64)
     for c in range(C):
         arr, off = ec.rice_decode_1d(buf, off)
         res[c] = arr
-    y = ec.lms_inverse(res)
-    x = _xadapt_inverse(y, ec.grid_parents(C, cols))
+    xt = ec.lms_inverse(res)
+    x = _bp_inverse(xt, parents, betas)
     return x.astype(np.int16)
 
 
@@ -368,14 +366,28 @@ _register(Codec("LMS+Rice+xchan", _e, _d, CodecMeta(
     lookahead_samples=ec.BLOCK, block_size=ec.BLOCK, notes=_XCHAN_NOTE),
     family="cross-channel", desc="LMS + grid-neighbour decorrelation (current best)"))
 
-# NEW candidate: backward-adaptive per-block cross-channel beta (no side-info,
-# fully causal -> lookahead 0, unlike the whole-signal +xchan variants above).
-_register(Codec("LMS+Rice+xchan_adaptive", xadapt_encode, xadapt_decode, CodecMeta(
-    integer_only=True, enc_ops=_LMS_OPS + _XCHAN_OPS + _XADAPT_XTRA,
-    dec_ops=_LMS_OPS + _XCHAN_OPS + _XADAPT_XTRA,
-    state_bytes_per_ch=_XADAPT_STATE, causal=True, lookahead_samples=0,
-    block_size=XADAPT_BLOCK, notes=_XADAPT_NOTE), family="cross-channel",
-    desc="LMS + grid-neighbour decorrelation, backward-adaptive per-block gain"))
+# NEW candidate: best-partner cross-channel selection (this cycle).
+# Encode adds, on top of LMS+xchan, a per-channel scan over <=4 causal-neighbour
+# candidates (each ~2 MACs/sample to accumulate <xg,xp> and <xp,xp>) to pick the
+# best partner -> ~8 extra enc ops/sample-ch; the decoder does NOT search (it
+# reads the chosen parent+beta side-info), so its op count matches plain xchan.
+# State adds one parent-id byte/ch beyond the incumbent xchan state.
+_BP_SELECT_OPS = 8
+_BP_STATE = _XCHAN_STATE + 1
+_BP_NOTE = ("per-channel best-partner: encoder scans <=4 causal grid neighbours "
+            "(left/up/up-left/up-right, all idx<g) and picks the min-Rice-bits "
+            "partner + integer gain; chosen (parent,beta) carried as 2xint16/ch "
+            "side-info. Selection derived offline over the whole signal (like the "
+            "incumbent xchan beta); embeddable realization selects per block "
+            "(look-ahead=block). Decoder is search-free.")
+_register(Codec("LMS+Rice+xchan_bestpartner", bestpartner_encode, bestpartner_decode,
+    CodecMeta(
+        integer_only=True, enc_ops=_LMS_OPS + _XCHAN_OPS + _BP_SELECT_OPS,
+        dec_ops=_LMS_OPS + _XCHAN_OPS,
+        state_bytes_per_ch=_LMS_STATE + _BP_STATE, causal=True,
+        lookahead_samples=ec.BLOCK, block_size=ec.BLOCK, notes=_BP_NOTE),
+    family="cross-channel",
+    desc="LMS + best-of-4 causal-neighbour cross-channel selection + Rice"))
 
 # NEW seeded candidate
 _register(Codec("fixed0-3+Rice", fixed_encode, fixed_decode, CodecMeta(
