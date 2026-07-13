@@ -11,6 +11,7 @@ for each cycle (hypothesis, exact commands, verifier transcripts) lives in
 |--:|---|---|---|---|---|---|:--:|---|:--:|:--:|---|---|
 | 1 | 2026-07-08 | `compression-cycle-2026-07-08` | LMS+Rice+xchan_adaptive | otb_hdsemg_vl | 2.13× | −0.01× (−0.48%) vs 2.14× | ✅ | PROMOTE (embeddability audit) | no — kept, not new best (Pareto-dominated; see note) | **yes** (2026-07-13, conclusively dominated) | [001](../experiments/001_lms_rice_xchan_adaptive.md) | [#1](https://github.com/vmani123/RHD2164-FPGA-Emulator/pull/1) merged |
 | 2 | 2026-07-10 | `compression-cycle-2026-07-10` | LMS+Rice+xchan_bestpartner | otb_hdsemg_vl | 2.15× | +0.01× (+0.40%) vs 2.14× | ✅ | PROMOTE (both verifiers, no split) | registered as a non-dominated Pareto-front entry; did not displace the port pick (`lms4s7+x6/b512`) | no — non-dominated (higher ratio AND higher cost, not dominated by the incumbent) | (none filed) | [#2](https://github.com/vmani123/RHD2164-FPGA-Emulator/pull/2) merged |
+| 3 | 2026-07-13 | `compression-cycle-2026-07-13` | LMS+Rice+iklt | otb_hdsemg_vl | 2.07× | −0.17× (−7.78%) vs 2.24× | ✅ | **verifier split** (A REJECT, B PROMOTE) — held for human review; not promoted | no — does not beat best AND verifier split (held for human review) | **yes** (conclusively Pareto-dominated: iklt 2.07×/0.068 vs LMS+Rice+xchan 2.24×/0.057) | [002](../experiments/002_lms_rice_iklt.md) | TBD |
 
 **Column note:** *verifier verdict* is the double-adversarial-verifier gate on
 correctness/embeddability only (bit-exact round-trip, `embedded_ok`, cost audit) —

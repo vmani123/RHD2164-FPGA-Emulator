@@ -137,6 +137,56 @@ selection is a different mechanism (which neighbour, not how the beta adapts)
 and is the first candidate this research loop has produced that is genuinely
 non-dominated vs. the incumbent on real data.
 
+## Cycle 2026-07-13 — fixed integer-KLT multi-tap front-end (SURVEY rec #3) — RETIRED
+
+Hyser/CEMHSEY/CapgMyo were network-unreachable this session; `otb_hdsemg_vl` was
+the only real dataset reachable, so this cycle's results are OTB-only (Hyser
+headline numbers above are unchanged from the last session that could reach it).
+This cycle also uses an **8 000-sample** OTB window (`results/cycle_bench.csv`),
+so its incumbent measures 2.24× here vs 2.14× at 15 000 samp above — compare
+candidates only *within* the same run.
+
+New codec `LMS+Rice+iklt`: a fixed, data-independent, multiplierless reversible
+integer inter-channel transform (integer-KLT via 3-step lifting/Givens rotations
+at θ=45°) as a **multi-tap** spatial front-end ahead of the unchanged per-channel
+LMS+Rice. **Verifier split — A REJECT, B PROMOTE → held for human review, NOT
+promoted.** It is also **conclusively Pareto-dominated on real data and RETIRED**
+(`retired=True` in `research/registry.py`; kept bit-exact, excluded from the
+default sweep, `--include-retired` re-checks it).
+
+Real `otb_hdsemg_vl` (64 ch, 5×13, 8 000 samp — bit-exact, `embedded_ok`):
+
+| codec | ratio | cost | note |
+|---|---:|---:|---|
+| LMS+Rice+xchan_bestpartner | 2.25× | 0.063 | max-ratio corner (dominates iklt) |
+| **LMS+Rice+xchan** (incumbent) | **2.24×** | **0.057** | best embeddable — **dominates iklt** |
+| delta+Rice+xchan | 2.19× | 0.013 | cheapest xchan (dominates iklt) |
+| LMS+Rice+iklt | **2.07×** | **0.068** | **candidate — highest cost, 4th ratio** |
+| LMS+Rice (xchan-off baseline) | 1.90× | 0.052 | temporal only |
+
+- **Attribution:** temporal predictor and Rice back-end are byte-identical to the
+  incumbent, so the only lever changed is the cross-channel front-end. The fixed
+  integer-KLT captures only **+8.8%** achieved cross-channel gain on real data
+  (iklt 2.07× / LMS+Rice 1.90×) — **roughly half** the single-neighbour subtract's
+  **+18.0%**. It lands −7.78% below the incumbent (2.07× vs 2.24×).
+- **Mechanism:** a fixed 45° butterfly is the exact KLT only under the equal-variance
+  *isotropic* model. Real HD-sEMG inter-electrode covariance is anisotropic and
+  non-stationary, so the fixed rotation is mismatched while the incumbent's
+  data-dependent single-neighbour beta tracks the actual pairwise correlation. The
+  synthetic sweep confirms the pattern at every correlation (iklt +5.9%/+10.4% vs
+  xchan +9.4%/+19.1% at sc0.6/sc0.9).
+- **Pareto:** dominated on real data by three registered codecs (LMS+Rice+xchan
+  2.24×/0.057, bestpartner 2.25×/0.063, delta+Rice+xchan 2.19×/0.013 — each higher
+  ratio AND lower cost). Not on the front → RETIRED.
+- **Sanity:** max real ratio 2.25× ≪ 6× ceiling (no leak); no FAIL bit-exact rows
+  (all `ok=True`, iklt round-trip OK, `neural_ok`); incumbent unchanged (no
+  regression to the recorded best).
+- **Negative result, kept honest:** a fixed *data-independent* multi-tap transform
+  does not beat *adaptive* single-neighbour subtraction on real anisotropic HD-sEMG.
+  The spatial gain lives in the data-dependent pairwise weight, not in a wider fixed
+  basis. Port recommendation below is **unchanged**. Full record:
+  `experiments/002_lms_rice_iklt.md`.
+
 ## Best embeddable after search (real Hyser)
 
 `research/search.py` on `hyser_1dof_f1_s1` (15 000 samples, `results/06_search_hyser.csv`):

@@ -399,6 +399,136 @@ def bestpartner_decode(buf):
 
 
 # ===========================================================================
+# NEW candidate: fixed reversible integer inter-channel transform (integer-KLT
+# via lifting) + per-channel LMS + Rice.
+# ---------------------------------------------------------------------------
+# Every shipped front-end so far subtracts exactly ONE reference channel (the
+# grid parent in +xchan; a selected best partner in +xchan_bestpartner) -- a
+# rank-1, single-tap operation. On a near-isotropic HD-EMG grid (neighbour
+# correlations ~0.73-0.79) several partners carry shared content one subtraction
+# cannot remove. This front-end is the untried MULTI-TAP spatial lever: a fixed,
+# offline/data-independent, MULTIPLIERLESS reversible INTEGER transform that
+# decorrelates each time-slice across the electrode array, applied BEFORE the
+# existing per-channel LMS+Rice temporal back-end.
+#
+# Reversible integer KLT via lifting (Hao & Shi; Srinivasan et al. IntSKLT):
+# any orthogonal transform factors into Givens rotations, and each rotation is
+# realised losslessly by THREE integer "lifting" (shear) steps with rounded
+# fixed-point coefficients -- reversible by construction (each step adds a
+# rounded integer function of the current integer state; the inverse subtracts
+# the identical value). No eigendecomposition, no per-block basis, NO side-info.
+#
+# Data-independent FIXED basis: for two equal-variance channels with covariance
+# [[1, r],[r, 1]], the KLT is EXACTLY the +/-45 degree rotation (sum/difference)
+# for ANY correlation r -- so a fixed 45-degree rotation is the true KLT of a
+# stationary isotropic neighbour pair, needing no training data. We cascade
+# these fixed rotations over a fixed grid-neighbour schedule (all horizontal
+# adjacent pairs, then all vertical adjacent pairs, in channel order). The
+# cascade makes each transformed channel a reversible integer mixture across a
+# whole neighbourhood -- genuinely multi-tap, distinct from the rank-1 subtracts.
+#
+# The transform is applied WITHIN each time-slice (columns are independent), so
+# temporal look-ahead is ZERO -- better than the +xchan variants, which need a
+# block to estimate beta. The decoder applies the inverse rotations in reverse
+# schedule order. Coefficients are global constants (no per-channel state).
+# ===========================================================================
+IKLT_MAGIC = 0x4B54          # 'KT' (integer-KLT)
+IKLT_SHIFT = 12              # fixed-point scale for the lifting coefficients
+# 45-degree rotation lifting coefficients (Hao-Shi 3-step factorization):
+#   shear P = (cos t - 1)/sin t,  update U = sin t,  at t = 45 deg.
+IKLT_P = int(round((0.7071067811865476 - 1.0) / 0.7071067811865476 * (1 << IKLT_SHIFT)))  # -1697
+IKLT_U = int(round(0.7071067811865476 * (1 << IKLT_SHIFT)))                                # 2896
+
+
+def _rmul(coef, v, shift=IKLT_SHIFT):
+    """Rounded fixed-point product round(coef * v / 2**shift), integer-only and
+    symmetric about zero, vectorized over an int64 array v. Identical on encode
+    and decode (same function, same operands) -> the lifting steps cancel
+    exactly. `>>` on a non-negative int64 is a floor; we negate for v*coef < 0 so
+    rounding is symmetric rather than toward -inf."""
+    p = coef * v.astype(np.int64)
+    half = np.int64(1 << (shift - 1))
+    pos = (p + half) >> np.int64(shift)
+    neg = -(((-p) + half) >> np.int64(shift))
+    return np.where(p >= 0, pos, neg)
+
+
+def _rot_forward(a, b, P=IKLT_P, U=IKLT_U, shift=IKLT_SHIFT):
+    """One reversible integer Givens rotation of two channel rows (each 1-D over
+    time), as three lifting steps. In-place-safe: returns new arrays."""
+    a = a + _rmul(P, b, shift)
+    b = b + _rmul(U, a, shift)
+    a = a + _rmul(P, b, shift)
+    return a, b
+
+
+def _rot_inverse(a, b, P=IKLT_P, U=IKLT_U, shift=IKLT_SHIFT):
+    """Exact inverse of _rot_forward: undo the three lifting steps in reverse."""
+    a = a - _rmul(P, b, shift)
+    b = b - _rmul(U, a, shift)
+    a = a - _rmul(P, b, shift)
+    return a, b
+
+
+def _iklt_pairs(C, cols):
+    """Fixed grid-neighbour rotation schedule: all horizontal adjacent pairs in
+    channel order, then all vertical adjacent pairs. Deterministic from (C, cols)
+    so encode and decode build the identical list."""
+    pairs = []
+    for g in range(C):
+        r, c = divmod(g, cols)
+        if c > 0:
+            pairs.append((g - 1, g))       # horizontal neighbour pair
+    for g in range(C):
+        r, c = divmod(g, cols)
+        if r > 0:
+            pairs.append((g - cols, g))    # vertical neighbour pair
+    return pairs
+
+
+def _iklt_forward(x, cols):
+    """Apply the fixed reversible integer inter-channel transform per time-slice
+    (vectorized over time). Returns the transformed [C, N] int64 array."""
+    C = x.shape[0]
+    y = x.astype(np.int64).copy()
+    for a, b in _iklt_pairs(C, cols):
+        y[a], y[b] = _rot_forward(y[a], y[b])
+    return y
+
+
+def _iklt_inverse(y, cols):
+    """Invert _iklt_forward by applying the inverse rotations in REVERSE order."""
+    C = y.shape[0]
+    x = y.astype(np.int64).copy()
+    for a, b in reversed(_iklt_pairs(C, cols)):
+        x[a], x[b] = _rot_inverse(x[a], x[b])
+    return x
+
+
+def iklt_encode(x, cols=16):
+    x = np.asarray(x, np.int64)
+    C, N = x.shape
+    y = _iklt_forward(x, cols)
+    res = ec.lms_forward(y)                 # order-8 sign-sign LMS (same as family)
+    body = b"".join(ec.rice_encode_1d(res[c]) for c in range(C))
+    hdr = struct.pack("<HHII", IKLT_MAGIC, cols, C, N)   # NO transform side-info
+    return hdr + body
+
+
+def iklt_decode(buf):
+    magic, cols, C, N = struct.unpack_from("<HHII", buf, 0)
+    assert magic == IKLT_MAGIC, "bad integer-KLT codec magic"
+    off = 12
+    res = np.empty((C, N), np.int64)
+    for c in range(C):
+        arr, off = ec.rice_decode_1d(buf, off)
+        res[c] = arr
+    y = ec.lms_inverse(res)
+    x = _iklt_inverse(y, cols)
+    return x.astype(np.int16)
+
+
+# ===========================================================================
 # Uniform codec objects + the registry
 # ===========================================================================
 class Codec:
@@ -531,6 +661,28 @@ _register(Codec("LMS+Rice+xchan_adaptive", xadapt_encode, xadapt_decode, CodecMe
 # best partner -> ~8 extra enc ops/sample-ch; the decoder does NOT search (it
 # reads the chosen parent+beta side-info), so its op count matches plain xchan.
 # State adds one parent-id byte/ch beyond the incumbent xchan state.
+# integer-KLT front-end: a fixed reversible integer inter-channel transform
+# applied per time-slice before LMS. The schedule has ~one horizontal + ~one
+# vertical rotation per channel (~2 rotations/channel, each rotation touching 2
+# channels -> ~1 rotation attributable per sample-ch on each axis). Each rotation
+# is 3 lifting shears = 3 x (1 mul + 1 rounded shift + 1 add) ~ 12 ops; ~2
+# rotations touch each channel -> ~24 ops/sample-ch. The transform is stateless
+# in time (fixed global coefficients, zero look-ahead), so it adds NO persistent
+# per-channel state on top of the LMS state. Decoder does the inverse rotations
+# at the same cost, so dec_ops == enc_ops.
+_IKLT_OPS = 24
+_IKLT_NOTE = (
+    "fixed multiplierless reversible integer inter-channel transform "
+    "(integer-KLT via 3-step lifting/Givens rotations at theta=45deg -- the "
+    "EXACT KLT of a stationary isotropic equal-variance neighbour pair for any "
+    "correlation, so data-independent: no training, no eigendecomposition, no "
+    "side-info). Applied per time-slice over a fixed grid-neighbour schedule "
+    "(all horizontal then all vertical adjacent pairs, channel order); the "
+    "cascade mixes each channel across a neighbourhood -> genuinely MULTI-TAP, "
+    "distinct from the rank-1 single-neighbour subtract of +xchan/bestpartner. "
+    "Transform is within a time-slice so temporal look-ahead=0; decoder applies "
+    "the inverse rotations in reverse order. Then per-channel LMS+Rice as usual.")
+
 _BP_SELECT_OPS = 8
 _BP_STATE = _XCHAN_STATE + 1
 _BP_NOTE = ("per-channel best-partner: encoder scans <=4 causal grid neighbours "
@@ -547,6 +699,23 @@ _register(Codec("LMS+Rice+xchan_bestpartner", bestpartner_encode, bestpartner_de
         lookahead_samples=ec.BLOCK, block_size=ec.BLOCK, notes=_BP_NOTE),
     family="cross-channel",
     desc="LMS + best-of-4 causal-neighbour cross-channel selection + Rice"))
+
+# NEW candidate: fixed reversible integer-KLT (lifting) inter-channel transform
+# (this cycle). Multi-tap spatial front-end; zero temporal look-ahead; no
+# side-info. Encode and decode both run the transform (fwd / inverse rotations),
+# so enc_ops == dec_ops. No persistent transform state beyond the LMS weights.
+_register(Codec("LMS+Rice+iklt", iklt_encode, iklt_decode, CodecMeta(
+    integer_only=True, enc_ops=_LMS_OPS + _IKLT_OPS, dec_ops=_LMS_OPS + _IKLT_OPS,
+    state_bytes_per_ch=_LMS_STATE, causal=True, lookahead_samples=0,
+    block_size=ec.BLOCK, notes=_IKLT_NOTE), family="cross-channel",
+    desc="fixed reversible integer-KLT (lifting) inter-channel transform + LMS + Rice",
+    retired=True,
+    retired_reason="Pareto-dominated by LMS+Rice+xchan on real otb_hdsemg_vl "
+                    "(iklt 2.07x/cost 0.068 vs incumbent 2.24x/cost 0.057 -- worse "
+                    "ratio AND higher cost; also dominated by bestpartner 2.25x/0.063 "
+                    "and delta+Rice+xchan 2.19x/0.013). Fixed 45deg integer-KLT captures "
+                    "only +8.8% real xchan gain vs single-neighbour subtract's +18.0%. "
+                    "experiments/002_lms_rice_iklt.md, cycle 2026-07-13."))
 
 # NEW seeded candidate
 _register(Codec("fixed0-3+Rice", fixed_encode, fixed_decode, CodecMeta(
