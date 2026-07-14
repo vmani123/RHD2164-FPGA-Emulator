@@ -47,20 +47,30 @@ compression methods (128-ch RHD2164 / HD-EMG node, STM32H745 Cortex-M7 and Spart
 XC7S25; integer/fixed only; causal/streaming; must beat per-channel FLAC by exploiting
 cross-channel spatial correlation). You find methods; you do NOT implement or measure them.
 
-Read first: compression_spec/candidates.md, compression_spec/cost_model.md, the current
-SURVEY.md (extend, don't duplicate), research/CYCLE_LOG.md (past cycles), the experiments/
-records it links to, and research/registry.py's retired codecs (run
-\`PYTHONPATH=host_tools ./.venv/bin/python research/registry.py --selftest\` which prints each
-codec with a RETIRED tag, or grep retired=True). HARD requirement: a method already
-implemented and conclusively verified Pareto-dominated must NOT be re-proposed as new. If a
-retired idea deserves another look (a follow-up variant that could overcome the rejection
-reason), say so explicitly and name the prior attempt + why this version differs.
+Read first, IN THIS ORDER: research/INSIGHTS.md (the distilled, theory-rooted learnings that
+tell you which mechanisms have PROVEN to work here and why -- let it steer your slate),
+compression_spec/candidates.md, compression_spec/cost_model.md, the current SURVEY.md (extend,
+don't duplicate), research/CYCLE_LOG.md (past cycles), the experiments/ records it links to, and
+research/registry.py's retired codecs (run \`PYTHONPATH=host_tools ./.venv/bin/python
+research/registry.py --selftest\` which prints each codec with a RETIRED tag, or grep
+retired=True). HARD requirement: a method already implemented and conclusively verified
+Pareto-dominated must NOT be re-proposed as new. If a retired idea deserves another look (a
+follow-up variant that could overcome the rejection reason), say so explicitly and name the prior
+attempt + why this version differs.
 
 Return 2-3 ranked, GENUINELY DISTINCT contenders -- distinct in MECHANISM (e.g. a different
-channel-pairing topology vs a different entropy back-end), not parameter variants of each
-other. For each: name + one-line mechanism, why it might beat per-channel FLAC (cross-channel
-spatial lever vs. just better temporal modeling), embeddability verdict against cost_model.md,
-and source citation (label paper-reported ratios "(paper-reported, unverified here)").
+channel-pairing topology vs a different entropy back-end), not parameter variants of each other.
+Candidates may come from the literature OR be a NOVEL codec you design by combining/extending the
+existing primitives (predictive coding, reversible integer transforms/lifting, context modeling,
+Golomb/Rice, ANS) -- novelty is welcome, but ONLY when rooted in sound compression theory: for a
+novel design, state the information-theoretic or signal-model reason it should lower residual
+entropy or decorrelate the array better BEFORE any measurement (an unprincipled "try X" is not a
+candidate). Align your slate with INSIGHTS.md's open frontier and avoid its dead ends. For each
+candidate: name + one-line mechanism, its theoretical basis / why it might beat per-channel FLAC
+(cross-channel spatial lever vs. better temporal modeling vs. better entropy back-end),
+embeddability verdict against cost_model.md, and source citation where applicable (label
+paper-reported ratios "(paper-reported, unverified here)"; for a novel design cite the principle
+it builds on).
 
 Propose only. Never edit codecs, run benchmarks, or state a measured ratio. EDIT SURVEY.md
 (Edit/Write) to record this cycle's findings in the file's existing style (keep existing
@@ -74,8 +84,14 @@ other codecs, no refactors, and NEVER touch rtl/ or sim/ (emulator RTL is off-li
 research/registry.py already has a codec added earlier THIS cycle, build on the file as it
 currently stands -- do not overwrite or revert another candidate.
 
-Read first: host_tools/embedded_codec.py (existing delta+Rice / LMS+Rice / +xchan codecs --
-match their integer-exact style), research/registry.py (uniform encode/decode + metadata
+The candidate may be a published method OR a novel design -- either way, implement it faithfully
+to its STATED theoretical mechanism (don't quietly substitute a simpler thing); the point of the
+cycle is to measure whether that specific principled idea pays off on real data.
+
+Read first: research/INSIGHTS.md (the proven learnings -- respect P2 "keep the temporal predictor
+small" and P4 "prefer backward-adaptive, zero side-info" unless the hypothesis is explicitly about
+changing one of them), host_tools/embedded_codec.py (existing delta+Rice / LMS+Rice / +xchan codecs
+-- match their integer-exact style), research/registry.py (uniform encode/decode + metadata
 interface + retired ledger -- never re-implement a retired mechanism), compression_spec/
 {candidates,cost_model}.md.
 
@@ -149,10 +165,19 @@ For EACH candidate this cycle, deliver and then APPLY as file edits:
    (write TBD).
 8. experiments/NNN_slug.md -- one new record per candidate (next sequential NNN), following the
    existing style (hypothesis, commands+outputs, both verifier verdicts, decision).
-9. 2-3 next hypotheses ranked by expected payoff -> add to SURVEY.md's top cycle-log note (do
-   not rewrite the rest of SURVEY.md).
+9. research/INSIGHTS.md -- **distill this cycle into a durable, theory-rooted learning** (the most
+   important deliverable for future cycles). For each candidate, append or REFINE the relevant
+   principle: what the real-data result proved about which mechanism works and WHY, stated in
+   compression-theory terms (entropy/mutual-information/predictor-order/basis-match/side-info), not
+   just the number. Move any conclusively-dominated candidate into the "Dead ends" list with its
+   theoretical reason, and update the "Open frontier" ranking if a lever was spent or newly
+   suggested. A learning enters INSIGHTS.md only when measured on REAL data. This is separate from
+   (and higher-signal than) the raw CYCLE_LOG row and the experiment record.
+10. 2-3 next hypotheses ranked by expected payoff -> add to SURVEY.md's top cycle-log note (do not
+    rewrite the rest of SURVEY.md), consistent with the refreshed INSIGHTS.md frontier.
 
-Every number must trace to a specific CSV cell or pasted tool output. Return a tight summary of
+Every number must trace to a specific CSV cell or pasted tool output. A learning in INSIGHTS.md
+must trace to a real-data measurement AND name its theoretical mechanism. Return a tight summary of
 what you attributed, decided, and edited per candidate.`
 
 // -------------------------------------------------------------------------------------

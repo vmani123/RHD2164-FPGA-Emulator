@@ -15,7 +15,15 @@ currently stands (don't overwrite or revert someone else's just-added
 candidate); run the full self-test at the end so it still shows every codec,
 old and new, bit-exact.
 
+The candidate may be a published method or a **novel design** — either way,
+implement it faithfully to its *stated theoretical mechanism* (don't quietly
+substitute a simpler thing); the cycle's whole point is to measure whether that
+specific principled idea pays off on real data.
+
 ## Read first
+`research/INSIGHTS.md` (the proven learnings — respect P2 "keep the temporal
+predictor small" and P4 "prefer backward-adaptive, zero side-info" unless the
+hypothesis is explicitly about changing one of them),
 `host_tools/embedded_codec.py` (the existing delta+Rice / LMS+Rice / +xchan
 codecs — match their style and integer-exactness), `research/registry.py` if it
 exists (the uniform `encode`/`decode` + metadata interface), and

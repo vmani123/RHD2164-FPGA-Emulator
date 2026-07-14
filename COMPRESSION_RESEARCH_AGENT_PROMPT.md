@@ -44,7 +44,16 @@ if a cycle needs to change, edit that file so the change is durable. The prose b
 
 An **orchestrator agent** runs a think → code → measure → analyze → iterate loop; deterministic tools are ground truth. Subagents live in `.claude/agents/*.md`, spawn via the Agent tool, run in isolated contexts, and parallelize. Drive it headless (`claude -p` via `run_research.sh`) or via the Claude Agent SDK; interactive for debugging.
 
-**Cycle:** read state (`LEADERBOARD.md`, latest CSV, last ablations, `CYCLE_LOG.md`, and the registry's retired list — never re-propose an already-rejected mechanism) → `surveyor` proposes **2-3 genuinely distinct** testable hypotheses → `implementer` adds/edits **exactly one** codec per invocation, called once per hypothesis, sequentially (must pass its round-trip self-test) → run `bench_lossless.py`/`bench.py` (tool) on all new codecs together → `verifier` (independent, per candidate) audits bit-exactness/`embedded_ok`/cost before any promotion → `analyst` attributes each change, updates the leaderboard, and calls **RETIRE yes/no** per candidate (only for codecs conclusively Pareto-dominated on real data — never for "not the best") → keep every bit-exact/`embedded_ok` codec regardless of ratio (retire the dominated ones so they stop cluttering the default sweep, but never delete them), log a replayable experiment record, iterate or gate.
+**Learnings are compounding, not disposable.** After every cycle the analyst distills the
+result into `research/INSIGHTS.md` — the durable, theory-rooted knowledge base of *what
+mechanism worked on real data and why* (entropy / mutual-information / predictor-order /
+basis-match / side-info terms, not just a number). The surveyor reads it first every cycle so
+selection improves over time. Candidates may be published methods **or novel codecs you design**
+by combining/extending the existing primitives — novelty is welcome, but only when rooted in
+sound compression theory (state the mechanism before measuring); every design still faces
+lossless + bit-exact + `embedded_ok` + real-data-decides.
+
+**Cycle:** read state (`INSIGHTS.md`, `LEADERBOARD.md`, latest CSV, last ablations, `CYCLE_LOG.md`, and the registry's retired list — never re-propose an already-rejected mechanism) → `surveyor` proposes **2-3 genuinely distinct** testable hypotheses → `implementer` adds/edits **exactly one** codec per invocation, called once per hypothesis, sequentially (must pass its round-trip self-test) → run `bench_lossless.py`/`bench.py` (tool) on all new codecs together → `verifier` (independent, per candidate) audits bit-exactness/`embedded_ok`/cost before any promotion → `analyst` attributes each change, updates the leaderboard, and calls **RETIRE yes/no** per candidate (only for codecs conclusively Pareto-dominated on real data — never for "not the best") → keep every bit-exact/`embedded_ok` codec regardless of ratio (retire the dominated ones so they stop cluttering the default sweep, but never delete them), log a replayable experiment record, iterate or gate.
 
 **Registry hygiene:** every codec ever added stays in `research/registry.py` and its self-test forever (reproducibility, non-negotiable #4/#6) — but once two independent verifiers or the analyst's Pareto check conclusively show it's dominated on real data, mark it `retired=True` in its `Codec(...)` registration with a one-line `retired_reason`. `research/bench.py`'s default sweep and the leaderboard then skip it automatically (`research/registry.py list_codecs()`); `--include-retired` re-benchmarks it on demand. This keeps the search moving at 2-3 candidates/cycle without re-litigating settled questions every time.
 
@@ -64,7 +73,7 @@ An **orchestrator agent** runs a think → code → measure → analyze → iter
 
 - `research/{embedded_cost,registry,datasets,search,survey}.py`; `bench_lossless.py` / `embedded_codec.py` extensions.
 - Agent wiring: `.claude/agents/{orchestrator,surveyor,implementer,analyst,verifier}.md`, the `PostToolUse` verifier hook, an optional headless runner.
-- `research/00_STATE.md`, `SURVEY.md`, `LEADERBOARD.md`, an `experiments/` log, `results/*.csv`, and a short `research/README.md`.
+- `research/00_STATE.md`, `SURVEY.md`, `LEADERBOARD.md`, **`research/INSIGHTS.md`** (the distilled, theory-rooted learnings, refreshed every cycle), `research/CYCLE_LOG.md`, an `experiments/` log, `results/*.csv`, and a short `research/README.md`.
 - All codecs bit-exact; nothing ranked a win unless `embedded_ok`; every headline number reproduced on **real** (not synthetic) data; `sim/run_sim.sh` still green.
 
 **Start with Stage 0 and stop for review.**

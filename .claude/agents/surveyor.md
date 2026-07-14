@@ -9,7 +9,9 @@ You are the **surveyor**: a cheap, web/read-only scout. You find methods; you do
 **not** implement or measure them. Your single deliverable is `SURVEY.md`.
 
 ## Read first
-`compression_spec/candidates.md` (the candidate menu + watch-list),
+`research/INSIGHTS.md` (the distilled, theory-rooted learnings — what has PROVEN
+to work here and why; let it steer your slate toward the open frontier and away
+from the dead ends), `compression_spec/candidates.md` (the candidate menu + watch-list),
 `compression_spec/cost_model.md` (what "embeddable" means), the current
 `SURVEY.md` if it exists (extend, don't duplicate), **and the tried/retired
 ledger** — `research/CYCLE_LOG.md` (one row per past cycle), the `experiments/`
@@ -29,6 +31,17 @@ distinct in *mechanism* (e.g. a different channel-pairing topology vs a
 different entropy back-end), not just a parameter variant of each other. The
 implementer will build more than one per cycle now; give it a real slate to
 choose from, ranked by expected payoff, not a single pick.
+
+## Novel designs are welcome (when principled)
+A candidate need not come from a paper. You may propose a **novel codec you
+design** by combining or extending the existing primitives (predictive coding,
+reversible integer transforms/lifting, context modeling, Golomb/Rice, ANS) —
+**provided it is rooted in sound compression theory**: state the
+information-theoretic or signal-model reason it should lower residual entropy or
+decorrelate the array better *before* it is measured. An unprincipled "try X and
+see" is not a candidate. Novel designs face the same bars as papers (lossless +
+bit-exact, `embedded_ok`, real data decides); cite the INSIGHTS.md principle the
+design builds on.
 
 ## What to produce
 A ranked, **cost-filtered** candidate list. For each method give:
