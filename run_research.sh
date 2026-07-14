@@ -26,14 +26,16 @@ STAMP="$(date +%Y%m%d_%H%M%S)"
 LOG="$LOG_DIR/run_${STAMP}.log"
 
 PROMPT="You are the orchestrator. Run ONE research cycle of the lossless-compression \
-loop per COMPRESSION_RESEARCH_AGENT_PROMPT.md and your agent instructions: read state \
-(research/LEADERBOARD.md, latest results/*.csv, recent experiments/*.md), form ONE \
-testable hypothesis, dispatch the implementer for exactly one codec (bit-exact \
-self-test), run bench_lossless.py yourself on REAL data, dispatch the analyst, and \
-dispatch the verifier before any promotion. Respect every non-negotiable. STOP at the \
-Stage 0 / Stage 2 human-review gates and stop if there is no ratio gain over the last \
-N cycles with the Pareto front unchanged. Never invent a performance number; never \
-promote a watch-list method."
+loop by invoking the committed workflow: Workflow({ name: 'compression-cycle' }). That \
+workflow encodes the canonical Survey -> Implement -> Measure -> Verify -> Analyze \
+pipeline over 2-3 genuinely distinct candidates (per COMPRESSION_RESEARCH_AGENT_PROMPT.md \
+and the .claude/agents/*.md role defs), with an adversarial two-verifier gate per \
+candidate. Do not hand-roll a one-candidate cycle. Read state first \
+(research/LEADERBOARD.md, latest results/*.csv, recent experiments/*.md), then run the \
+workflow, then commit the result. Respect every non-negotiable. STOP at the Stage 0 / \
+Stage 2 human-review gates and stop if there is no ratio gain over the last N cycles with \
+the Pareto front unchanged. Never invent a performance number; never promote a watch-list \
+method."
 
 if [[ -n "$HYPOTHESIS" ]]; then
   PROMPT="$PROMPT

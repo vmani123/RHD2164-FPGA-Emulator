@@ -34,7 +34,15 @@ The 5-stage harness in `COMPRESSION_HARNESS_README.md` is **done and green**. Ex
 
 ## Agent orchestration loop (how it runs)
 
-An **orchestrator agent** runs a think → code → measure → analyze → iterate loop; deterministic tools are ground truth. Subagents live in `.claude/agents/*.md`, spawn via the Agent tool, run in isolated contexts, and parallelize. Drive it headless (`claude -p`) or via the Claude Agent SDK; interactive for debugging.
+**Canonical runner: the committed workflow `.claude/workflows/compression-cycle.js`.** One
+research cycle = `Workflow({ name: 'compression-cycle' })`. That script *is* the version-controlled
+definition of a cycle — Survey → Implement → Measure → Verify → Analyze over **2–3 genuinely
+distinct candidates** (never one), with an adversarial **two-verifier gate per candidate** and
+every `agent()` pinned to the strongest model. Do not hand-write a one-candidate pipeline inline;
+if a cycle needs to change, edit that file so the change is durable. The prose below documents the
+*intent* the workflow implements.
+
+An **orchestrator agent** runs a think → code → measure → analyze → iterate loop; deterministic tools are ground truth. Subagents live in `.claude/agents/*.md`, spawn via the Agent tool, run in isolated contexts, and parallelize. Drive it headless (`claude -p` via `run_research.sh`) or via the Claude Agent SDK; interactive for debugging.
 
 **Cycle:** read state (`LEADERBOARD.md`, latest CSV, last ablations, `CYCLE_LOG.md`, and the registry's retired list — never re-propose an already-rejected mechanism) → `surveyor` proposes **2-3 genuinely distinct** testable hypotheses → `implementer` adds/edits **exactly one** codec per invocation, called once per hypothesis, sequentially (must pass its round-trip self-test) → run `bench_lossless.py`/`bench.py` (tool) on all new codecs together → `verifier` (independent, per candidate) audits bit-exactness/`embedded_ok`/cost before any promotion → `analyst` attributes each change, updates the leaderboard, and calls **RETIRE yes/no** per candidate (only for codecs conclusively Pareto-dominated on real data — never for "not the best") → keep every bit-exact/`embedded_ok` codec regardless of ratio (retire the dominated ones so they stop cluttering the default sweep, but never delete them), log a replayable experiment record, iterate or gate.
 
