@@ -345,7 +345,7 @@ const perCandidate = ok.map(o => {
   return { name: o.codec_name, cost_metadata: o.cost_metadata_summary, impl_notes: o.notes,
            verifierA: v.a ? v.a.verdict : 'AGENT_FAILED', verifierB: v.b ? v.b.verdict : 'AGENT_FAILED',
            bothPromote: !!v.bothPromote, split: !!v.split }
-}))
+})
 const analyze = await agent(
   ANALYST_ROLE + `
 

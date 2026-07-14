@@ -23,7 +23,9 @@ self-contained. Use `ultracode` for this entire cycle.
    `SURVEY.md`, `COMPRESSION_RESEARCH_AGENT_PROMPT.md`, and `results/*.csv`.
 
 **ONE CYCLE — run the committed workflow (do NOT hand-roll a one-candidate cycle):**
-4. Invoke `Workflow({ name: 'compression-cycle', args: { date: '<YYYY-MM-DD today>', branch: '<your cycle branch>' } })`.
+4. Invoke `Workflow({ scriptPath: '.claude/workflows/compression-cycle.js', args: { date: '<YYYY-MM-DD today>', branch: '<your cycle branch>' } })`.
+   (`scriptPath` runs the exact committed file; `name: 'compression-cycle'` only works if this
+   environment registers `.claude/workflows/` — `scriptPath` always works, so prefer it.)
    That workflow *is* the canonical cycle: Survey → Implement → Measure → Verify → Analyze
    over **2–3 genuinely distinct candidates**, with an adversarial **two-verifier gate per
    candidate** (promote only on a unanimous PROMOTE that also beats the current best on REAL
@@ -54,7 +56,5 @@ prints numbers); never touch the emulator SPI/DDR/timing RTL (keep the sim green
 
 ---
 
-*Note:* if `Workflow({ name: 'compression-cycle' })` ever fails to resolve the name in a
-headless run, fall back to
-`Workflow({ scriptPath: '.claude/workflows/compression-cycle.js', args: { … } })` — same
-committed script.
+*Note:* `scriptPath` is the reliable invocation (it runs the exact committed file). Only use
+`name: 'compression-cycle'` if this environment is confirmed to register `.claude/workflows/`.
