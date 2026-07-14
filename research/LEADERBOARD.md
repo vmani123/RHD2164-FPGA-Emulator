@@ -6,7 +6,7 @@ produced by the harness (`research/bench.py` + `research/search.py`), asserted
 bit-exact, and gated by `embedded_ok` — never by reasoning (non-negotiables #1,
 #2, #4). Maintained per Stage 6 of `../COMPRESSION_RESEARCH_AGENT_PROMPT.md`.
 
-_Updated: 2026-07-13 · branch `compression-wip`. Cycles 1 & 2 (2026-07-08,
+_Updated: 2026-07-14 · branch `compression-cycle-2026-07-13`. Cycles 1 & 2 (2026-07-08,
 2026-07-10) merged. `LMS+Rice+xchan_adaptive` is now marked `retired=True` in
 `research/registry.py` (conclusively Pareto-dominated — kept, bit-exact,
 excluded from the default `bench.py` sweep and this table's headline rows;
@@ -186,6 +186,41 @@ Real `otb_hdsemg_vl` (64 ch, 5×13, 8 000 samp — bit-exact, `embedded_ok`):
   The spatial gain lives in the data-dependent pairwise weight, not in a wider fixed
   basis. Port recommendation below is **unchanged**. Full record:
   `experiments/002_lms_rice_iklt.md`.
+
+## Cycle 2026-07-14 — three distinct front-ends: adaptive rotation, tANS back-end, global CAR
+
+All four real sets reachable and benched at 15 000 samples (`results/cycle_bench.csv`);
+incumbent numbers reproduce the headline exactly (Hyser `LMS+Rice+xchan` 1.474×, OTB 2.143×).
+Three genuinely distinct candidates, **all double-verified PROMOTE (no splits)**, **none
+promoted** (none beats the current best on real data), **two retired**:
+
+| candidate | mechanism | real result (Hyser / OTB / CEMHSEY / CapgMyo) | cost | verdict |
+|---|---|---|---:|---|
+| `LMS+Rice+iklt_adaptive` | data-dependent adaptive integer-KLT rotation (multi-tap) | 1.352× / 1.885× / 1.761× / 1.326× | 0.083 | **RETIRED** — dominated on all 4 |
+| `LMS+Rice+xchan_tans` | tANS entropy back-end vs Rice (same front-end) | 1.451× / 2.103× / 1.922× / 1.330× | 0.109 | **RETIRED** — dominated on all 4 |
+| `LMS+Rice+acar` | global common-average-reference lift (rank-1 common-mode) | 1.363× / 2.089× / 1.743× / 1.332× | 0.056 | **kept** — non-dominated corner on OTB/CapgMyo |
+
+- **`iklt_adaptive` (open-frontier #2, data-dependent multi-tap).** Isolated cross-channel gain
+  only **+1.7–3.3%** on real data (−0.5% CapgMyo) vs the single-neighbour subtract's +10.8–17.4%
+  — *worse* than the retired fixed iklt. A backward-estimated rotation angle is stale/noisy on
+  non-stationary HD-sEMG and, being energy-preserving, corrupts *both* channels; the rank-1
+  subtract is the more robust decorrelator. Conclusively Pareto-dominated by `LMS+Rice+xchan`
+  (higher ratio AND lower cost) on all 4 real sets → RETIRED.
+- **`xchan_tans` (open-frontier #1, entropy back-end — the axis never tested in 4 cycles).**
+  With the front-end held identical, tANS is **1.4–1.8% SMALLER than Rice at ~2× cost** on every
+  real set. Real HD-sEMG residuals are near-geometric, so Rice is already at the entropy floor and
+  the per-block ANS table is a net loss (confirms P5). Conclusively dominated → RETIRED. **The
+  entropy back-end is now a proven-negative, spent lever.**
+- **`acar` (global common-mode, a new MI slice).** Captures **+14.4%** on the small tightly-coupled
+  64-ch OTB array (near the +17.4% single-neighbour gain) but collapses to +0.8–2.5% on the larger
+  128-/320-ch arrays where redundancy is *local*. Genuinely **non-dominated on OTB** (2.089×/0.0559,
+  *cheaper* than the incumbent) and CapgMyo → kept registered as a low-cost Pareto corner; dominated
+  by `delta+Rice+xchan` on Hyser/CEMHSEY. Not best → not promoted, not retired.
+- **Sanity:** max real ratio in the run 2.151× ≪ 6× ceiling; every row bit-exact (`ok=True`), all
+  `embedded_ok`/`neural_ok`; incumbent unchanged (no regression). Only `research/registry.py`
+  (retire flags), report files, and `SURVEY.md` touched; `rtl/`/`sim/` untouched.
+- **Port recommendation unchanged.** Two open-frontier levers are now spent; the live frontier
+  collapses onto variations of the adaptive rank-1 subtract (best-partner on order-4 first).
 
 ## Best embeddable after search (real Hyser)
 

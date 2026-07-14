@@ -44,6 +44,17 @@ is not. Every novel design faces the same bars: lossless + bit-exact, `embedded_
   high**. On low-correlation arrays the ceiling is real; do not chase spatial gain there.
   CapgMyo is the honest negative control that confirms the harness reports gain only where
   the signal carries it.
+- **Refinement (2026-07-14, ACAR):** the cross-channel MI decomposes into distinct,
+  **non-interchangeable slices**, and array size selects which one dominates. Removing the
+  **global rank-1 common-mode** (`LMS+Rice+acar`, array-mean CAR lift) captured **+14.4%** on
+  the small, tightly-coupled 64-ch OTB array (near the single-neighbour subtract's +17.4%) but
+  collapsed to **+0.8–2.5%** on the larger 128-/320-ch Hyser/CEMHSEY arrays, where the
+  single-neighbour beta still got +10.8–13.1%. **Theory:** CAR removes exactly one eigenvector
+  (DC-across-array); on small arrays the shared content *is* that global mode, but on large
+  arrays it is spatially **local** (high neighbour correlation, low global coherence across
+  320 channels), so a single global mean is a mismatched basis and the local-pairwise weight
+  captures far more MI. Choose the spatial basis to match the *spatial scale* of the real
+  redundancy — global mean for tight arrays, local pairwise for extended ones.
 
 ### P2 — Temporal prediction saturates early; deeper prediction *hurts* on real data.
 - **Evidence:** order-4 LMS beats order-8 on both Hyser and OTB (order 4→8 *costs* ratio in
@@ -69,6 +80,18 @@ is not. Every novel design faces the same bars: lossless + bit-exact, `embedded_
   multi-tap spatial transform is only worth its cost if its **basis adapts** (data-dependent
   lifting), which is borderline on the embedded budget — a fixed multi-tap basis will not beat
   the adaptive rank-1 subtract here.
+- **Refinement (2026-07-14, iklt_adaptive) — even a *data-dependent* multi-tap basis loses,
+  and by *more* than the fixed one.** Making the integer-KLT rotation angle backward-adaptive
+  (`LMS+Rice+iklt_adaptive`, per-pair/per-block angle from the previous block's covariance)
+  captured only **+1.7–3.3%** real cross-channel gain (−0.5% on CapgMyo) — *worse* than the
+  retired **fixed** 45° iklt (+8.8% on OTB), and Pareto-dominated on **all 4** real sets.
+  **Theory:** two compounding penalties. (1) The angle is estimated from the *previous* block —
+  a stale, noisy estimate on non-stationary HD-sEMG. (2) A Givens rotation is energy-preserving
+  and mixes **both** channels, so angle-estimation error corrupts *both* outputs, whereas the
+  rank-1 subtract injects estimation noise only into the residual channel and leaves the parent
+  clean; cascading the noisy rotation over all pairs compounds the error. **The rank-1 adaptive
+  subtract is not just a cheaper decorrelator — it is a more *robust* one under causal estimation
+  noise.** Multi-tap spatial transforms (fixed OR adaptive) are now a settled dead end here.
 
 ### P4 — Embeddability is a hard gate; rank on the ratio-vs-cost Pareto front, and prefer backward-adaptive (zero side-info).
 - **Evidence:** `LMS+Rice+xchan_adaptive` (backward-adaptive integer beta) was kept for
@@ -84,35 +107,72 @@ is not. Every novel design faces the same bars: lossless + bit-exact, `embedded_
   on-node result. Never rank on ratio alone — a higher-cost point must *earn* its place on the
   Pareto front.
 
-### P5 — Rice/Golomb is near-optimal for the (near-geometric) residual; the entropy back-end is a small, still-unproven lever.
+### P5 — Rice/Golomb is near-optimal for the (near-geometric) residual; the entropy back-end is NOT a lever here (proven negative on real data).
 - **Evidence:** every embeddable codec here uses adaptive Golomb-Rice and lands close to the
   offline generic references (lzma/zstd) it should not be able to reach with a per-symbol coder.
+  **Direct head-to-head (2026-07-14, `LMS+Rice+xchan_tans`):** a LOCO-ANS-style table-driven
+  tANS coder swapped in for Rice on the *identical* LMS+xchan predictor was **1.4–1.8% SMALLER
+  at ~2× the cost** (0.109 vs 0.0572) on **all 4** real sets (otb 2.103× vs 2.143×, hyser 1.451×
+  vs 1.474×, capgmyo 1.330× vs 1.349×, cemhsey 1.922× vs 1.955×) — a net loss, Pareto-dominated.
 - **Theory:** Golomb-Rice is the optimal prefix code for an exactly-geometric (Laplacian-ish)
-  residual. Real residual blocks deviate from geometric, so a table-driven ANS coder *could*
-  recover the sub-Golomb fraction — but the per-block frequency table (side-info) and reverse
-  encode buffer may cost more than the bits gained.
-- **Implication:** an rANS/tANS back-end is worth a **head-to-head vs Rice on the same
-  predictor**, but expect a small, uncertain payoff — it is a refinement, not the main lever.
+  residual. Real HD-sEMG residual blocks are near-geometric enough that Rice already sits at the
+  entropy floor — there is **no sub-Golomb fraction large enough to amortize** the ANS
+  category+mantissa split plus the per-block category-frequency table (side-info). The heavier
+  coder pays overhead against a back-end already at the limit, so it loses bits.
+- **Implication:** the entropy back-end is a **spent, dead lever** on this data — do not
+  re-propose rANS/tANS/arithmetic back-ends as a ratio play. The residual entropy is set by the
+  predictor + spatial front-end; to lower coded bits, lower the residual entropy upstream (better
+  decorrelation), not the coder. (A back-end swap could still be justified purely for
+  *throughput/hardware* reasons, never for ratio.)
 
 ---
 
 ## Open frontier (untried levers, ranked by expected payoff/cost)
 
-1. **Entropy back-end swap — rANS/tANS vs Rice on the same predictor** (P5). The one axis never
-   tested; FPGA-friendly as tANS (table lookups + renorm, no per-symbol division).
-2. **Data-*dependent* multi-tap spatial transform** (P3). A lifting transform whose basis adapts
-   backward per block — the only way a multi-tap front-end could beat the adaptive rank-1 subtract
-   without violating P3. Watch the cost gate (per-block basis estimation).
-3. **Best-partner selection rebuilt on the order-4 predictor** (P2 + P4). Cycle 2's best-partner
-   used order-8; on the search-proven cheaper order-4 it might dominate the incumbent on *both*
-   axes instead of only extending the ratio ceiling at extra cost.
+_Frontier #1 (entropy back-end) and #2 (data-dependent multi-tap transform) from the prior
+cycle were both SPENT this cycle with **negative** real-data results — moved to Dead ends
+(P5, P3). Every remaining live lever is a variation on the **adaptive rank-1 spatial subtract**,
+which every cycle keeps confirming as the mechanism that works._
+
+1. **Best-partner selection rebuilt on the order-4 predictor** (P2 + P4). Cycle 2's best-partner
+   used order-8; on the search-proven cheaper order-4 (`lms4s7+x7/b512`, cycle_search.csv 2.321×
+   / 0.027) it might dominate the incumbent on *both* axes instead of only extending the ratio
+   ceiling at extra cost. **Now the highest-payoff live lever** — a cheaper, better predictor
+   under the proven front-end, no new mechanism risk.
+2. **Multi-parent backward-adaptive rank-1 subtract** (P1 + P3-refinement + P4). Extend the
+   single grid-parent to a *small* set of causal neighbours (e.g. up + left), each with its own
+   backward-adaptive integer beta, summed. Stays rank-per-parent (robust under estimation noise,
+   unlike the rotation that corrupts both channels) and zero side-info. Targets the residual
+   *local* spatial MI that one parent leaves — largest where neighbour |corr| is high
+   (OTB/CEMHSEY/Hyser). Gate hard on cost (each parent adds state + ops).
+3. **Scale-matched two-stage spatial front-end: global CAR *then* local pairwise** (P1-refinement).
+   ACAR and the single-neighbour subtract capture *different* MI slices (global common-mode vs
+   local pairwise); on tight arrays CAR wins, on large arrays pairwise wins. A backward-gated CAR
+   lift followed by the adaptive neighbour subtract on the CAR residual could capture *both*
+   slices where both exist. Risk: on large arrays CAR adds ~nothing (may not clear its gate) —
+   measure whether the two slices are additive or already redundant with each other.
 
 ## Dead ends (retired — do NOT re-propose as new; a genuinely different variant must say why)
 
 - **Fixed data-independent inter-channel transform** (`LMS+Rice+iklt`): fixed 45° integer-KLT,
   dominated — its isotropy/stationarity assumption is violated by real HD-sEMG (P3).
+- **Data-*dependent* multi-tap inter-channel rotation** (`LMS+Rice+iklt_adaptive`, retired
+  2026-07-14): backward-adaptive integer-KLT angle, dominated on ALL 4 real sets and *worse* than
+  the fixed iklt (only +1.7–3.3% xchan gain, −0.5% on CapgMyo). The backward-estimated angle is
+  stale/noisy and an energy-preserving rotation corrupts BOTH channels, so it is less robust than
+  the rank-1 subtract (P3-refinement). **Multi-tap spatial transforms — fixed or adaptive — are a
+  settled dead end here.**
+- **Entropy back-end swap — tANS/rANS vs Rice** (`LMS+Rice+xchan_tans`, retired 2026-07-14):
+  1.4–1.8% SMALLER than Rice at ~2× cost on all 4 real sets. Rice is already at the entropy floor
+  for the near-geometric residual; the ANS table side-info is a net loss (P5). Do not re-propose
+  any entropy-coder swap as a *ratio* play.
 - **Per-block single-neighbour adaptive beta alone** (`LMS+Rice+xchan_adaptive`): dominated by the
   incumbent on real OTB (worse ratio AND higher cost); kept only for the zero-side-info port story.
+- **[Kept, NOT retired — non-dominated corner] Global common-mode CAR** (`LMS+Rice+acar`): a
+  low-cost Pareto point on tight arrays (OTB +14.4%, 2.089×/0.0559 — cheaper than the incumbent)
+  but not on large arrays where redundancy is local (P1-refinement). Registered, not the best,
+  not dominated — a candidate ingredient for the scale-matched two-stage front-end (frontier #3),
+  not a dead end.
 
 ## Sanity anchors
 

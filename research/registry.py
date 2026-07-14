@@ -529,6 +529,574 @@ def iklt_decode(buf):
 
 
 # ===========================================================================
+# NEW candidate: DATA-DEPENDENT adaptive integer-lifting rotation cascade
+# (backward-adaptive Givens angle) + per-channel LMS + Rice.
+# ---------------------------------------------------------------------------
+# This is the retired fixed integer-KLT (`LMS+Rice+iklt`) with its ONE fatal
+# assumption removed. The retired variant rotated every grid-neighbour pair by a
+# FIXED 45 degrees -- the exact KLT only of a *stationary, isotropic,
+# equal-variance* pair. INSIGHTS P3 MEASURED that this fixed basis captured only
+# ~+8.8% real cross-channel gain vs the data-dependent single-neighbour subtract's
+# +18.0%, because real HD-sEMG covariance is anisotropic and non-stationary: the
+# whole gap is basis mismatch. Here the rotation ANGLE becomes data-dependent and
+# backward-adaptive, closing that gap while staying multiplierless and lossless.
+#
+# Mechanism (keeps the reversible 3-lift shear butterfly of the iklt verbatim --
+# multiplierless, lossless by construction for ANY integer lift coefficients):
+#   * Per grid-neighbour pair (a,b) and per time-block i, choose a QUANTIZED
+#     Givens angle theta from the pair's 2x2 covariance [[saa,sab],[sab,sbb]]
+#     accumulated over the PREVIOUS block (i-1) of the already-reconstructed RAW
+#     channels. The chosen angle is the tabulated theta that minimizes the
+#     post-rotation off-diagonal |s'_ab| = |0.5(sbb-saa)sin2t + sab cos2t| -- i.e.
+#     the discrete argmin of the true 2x2 decorrelating rotation, evaluated with
+#     an integer sin/cos table (no atan, no float, no eigendecomposition).
+#   * theta[block i] depends only on RAW block i-1, which the decoder reconstructs
+#     bit-exactly before it reaches block i (it inverts the cascade block-by-block
+#     in time order), so the decoder recomputes the SAME angle -> ZERO side-info,
+#     fully causal, look-ahead 0 (backward-adaptive, INSIGHTS P4). Block 0
+#     bootstraps to the identity angle (theta=0), so it is coded as if the spatial
+#     transform were off; the basis then adapts each block.
+#   * The angles are applied as a CASCADE over the fixed grid-neighbour schedule
+#     (all horizontal adjacent pairs, then all vertical) -- reusing _iklt_pairs --
+#     so each transformed channel becomes a reversible integer mixture across a
+#     whole neighbourhood: genuinely MULTI-TAP, distinct from the rank-1
+#     single-neighbour subtract of +xchan/xadapt/bestpartner.
+#
+# Distinct from BOTH retired mechanisms on the axis INSIGHTS P3 names decisive:
+#   - vs `LMS+Rice+iklt` (retired): data-INDEPENDENT fixed 45deg basis -> here
+#     data-DEPENDENT per-pair/per-block angle (the exact lever P3 says is decisive).
+#   - vs `LMS+Rice+xchan_adaptive` (retired): an asymmetric rank-1 subtract of ONE
+#     channel with a scalar beta -> here an energy-preserving ORTHOGONAL rotation of
+#     BOTH channels, cascaded to a multi-tap transform.
+# Behind it: the identical order-8 sign-sign LMS + adaptive Rice back-end as the
+# whole family (unchanged, so the ONLY variable vs the retired iklt is the basis).
+#
+# Bases: Srinivasan et al. IntSKLT (reversible-integer KLT via ladder/lifting,
+# IEEE 7071329); RGate (lifted-Givens integer-reversible transform + backward-
+# adaptive Golomb-Rice, 221578983); reversible integer TDLT/KLT cross-channel
+# decorrelation (IEEE 5075592). Paper-reported context; unverified here.
+# ===========================================================================
+ITSKLT_MAGIC = 0x4954         # 'IT'  (Integer adaptive Transform)
+ITSKLT_SHIFT = IKLT_SHIFT     # lift-coefficient fixed point (as the retired iklt)
+ITSKLT_TRIG_SHIFT = 14        # sin/cos fixed point used only for angle SELECTION
+ITSKLT_BLOCK = ec.BLOCK       # backward-adaptation block (aligns with Rice block)
+
+
+def _itsklt_build_table():
+    """Build the quantized-angle lifting/selection tables. Float is used HERE, at
+    import, to precompute integer constants only (exactly like IKLT_P/IKLT_U
+    above) -- the encode/decode PATH that follows uses these integer tables and no
+    float. Returns per-angle lift coeffs (P,U at ITSKLT_SHIFT) and selection
+    trig (sin2t,cos2t at ITSKLT_TRIG_SHIFT), plus the identity-angle index."""
+    degs = np.arange(-60, 61, 4)              # 31 angles incl. 0 (identity)
+    P = np.empty(degs.size, np.int64)
+    U = np.empty(degs.size, np.int64)
+    SIN2 = np.empty(degs.size, np.int64)
+    COS2 = np.empty(degs.size, np.int64)
+    for j, d in enumerate(degs):
+        t = float(np.deg2rad(float(d)))
+        s, c = float(np.sin(t)), float(np.cos(t))
+        # 3-step lifting factorization of R(theta): P = (cos t - 1)/sin t =
+        # -tan(t/2), U = sin t (Hao-Shi / IntSKLT). theta=45deg reproduces IKLT.
+        P[j] = 0 if abs(s) < 1e-12 else int(round((c - 1.0) / s * (1 << ITSKLT_SHIFT)))
+        U[j] = int(round(s * (1 << ITSKLT_SHIFT)))
+        SIN2[j] = int(round(float(np.sin(2.0 * t)) * (1 << ITSKLT_TRIG_SHIFT)))
+        COS2[j] = int(round(float(np.cos(2.0 * t)) * (1 << ITSKLT_TRIG_SHIFT)))
+    zero_idx = int(np.flatnonzero(degs == 0)[0])
+    return P, U, SIN2, COS2, zero_idx
+
+
+_ITSKLT_P, _ITSKLT_U, _ITSKLT_SIN2, _ITSKLT_COS2, _ITSKLT_ZERO = _itsklt_build_table()
+
+
+def _itsklt_angle(saa, sbb, sab):
+    """Integer-only backward angle selection for the 2x2 covariance
+    [[saa,sab],[sab,sbb]]: return the index of the tabulated Givens angle that
+    minimizes the post-rotation off-diagonal covariance. Since
+    s'_ab = 0.5(sbb-saa)sin2t + sab cos2t, we minimize |(sbb-saa)sin2t + 2 sab
+    cos2t| (a common positive scale 2 dropped). All operands are integers, so the
+    argmin is deterministic and identical on encode and decode. (saa,sbb,sab are
+    sums over <=256 int16 products -> |.| < 3e11; times the <=2^14 trig entries and
+    a factor 2 stays < 1e16, comfortably inside int64.)"""
+    f = (int(sbb) - int(saa)) * _ITSKLT_SIN2 + (2 * int(sab)) * _ITSKLT_COS2
+    return int(np.argmin(np.abs(f)))
+
+
+def _itsklt_block_angles(xprev, pairs):
+    """Angle index for every schedule pair from the previous RAW block xprev
+    ([C, B] int64). Covariance per pair is over the ORIGINAL channels (not the
+    partially-rotated state), so the decoder -- which reconstructs the raw
+    previous block exactly -- derives identical angles."""
+    idx = {}
+    for (a, b) in pairs:
+        xa = xprev[a]
+        xb = xprev[b]
+        saa = int((xa * xa).sum())
+        sbb = int((xb * xb).sum())
+        sab = int((xa * xb).sum())
+        idx[(a, b)] = _itsklt_angle(saa, sbb, sab)
+    return idx
+
+
+def _itsklt_forward(x, cols, B=ITSKLT_BLOCK):
+    """Apply the backward-adaptive integer rotation cascade, per time-block.
+    Angles for block i come from RAW block i-1 (block 0 -> identity). Returns the
+    transformed [C, N] int64 array."""
+    C, N = x.shape
+    x = x.astype(np.int64)
+    y = x.copy()
+    pairs = _iklt_pairs(C, cols)
+    nblocks = (N + B - 1) // B
+    for i in range(nblocks):
+        s, e = i * B, min((i + 1) * B, N)
+        if i == 0:
+            idx = {pr: _ITSKLT_ZERO for pr in pairs}          # identity bootstrap
+        else:
+            idx = _itsklt_block_angles(x[:, (i - 1) * B:i * B], pairs)
+        for (a, b) in pairs:
+            j = idx[(a, b)]
+            y[a, s:e], y[b, s:e] = _rot_forward(
+                y[a, s:e], y[b, s:e], _ITSKLT_P[j], _ITSKLT_U[j], ITSKLT_SHIFT)
+    return y
+
+
+def _itsklt_inverse(y, cols, B=ITSKLT_BLOCK):
+    """Invert _itsklt_forward. We rebuild the RAW signal block-by-block in time
+    order; before block i is inverted, block i-1's raw samples are already in x, so
+    the same per-pair angles are recomputed and the cascade is undone in REVERSE
+    pair order."""
+    C, N = y.shape
+    y = y.astype(np.int64)
+    x = y.copy()
+    pairs = _iklt_pairs(C, cols)
+    nblocks = (N + B - 1) // B
+    for i in range(nblocks):
+        s, e = i * B, min((i + 1) * B, N)
+        if i == 0:
+            idx = {pr: _ITSKLT_ZERO for pr in pairs}
+        else:
+            idx = _itsklt_block_angles(x[:, (i - 1) * B:i * B], pairs)
+        for (a, b) in reversed(pairs):
+            j = idx[(a, b)]
+            x[a, s:e], x[b, s:e] = _rot_inverse(
+                x[a, s:e], x[b, s:e], _ITSKLT_P[j], _ITSKLT_U[j], ITSKLT_SHIFT)
+    return x
+
+
+def itsklt_encode(x, cols=16):
+    x = np.asarray(x, np.int64)
+    C, N = x.shape
+    y = _itsklt_forward(x, cols)
+    res = ec.lms_forward(y)                  # order-8 sign-sign LMS (same as family)
+    body = b"".join(ec.rice_encode_1d(res[c]) for c in range(C))
+    hdr = struct.pack("<HHII", ITSKLT_MAGIC, cols, C, N)  # NO transform side-info
+    return hdr + body
+
+
+def itsklt_decode(buf):
+    magic, cols, C, N = struct.unpack_from("<HHII", buf, 0)
+    assert magic == ITSKLT_MAGIC, "bad adaptive integer-KLT codec magic"
+    off = 12
+    res = np.empty((C, N), np.int64)
+    for c in range(C):
+        arr, off = ec.rice_decode_1d(buf, off)
+        res[c] = arr
+    y = ec.lms_inverse(res)
+    x = _itsklt_inverse(y, cols)
+    return x.astype(np.int16)
+
+
+# ===========================================================================
+# NEW candidate: table-driven tANS residual entropy back-end vs Rice, on the
+# IDENTICAL LMS+Rice+xchan predictor and cross-channel front-end.
+# ---------------------------------------------------------------------------
+# Every cycle so far moved only the cross-channel FRONT-END; the entropy
+# BACK-END (adaptive Golomb-Rice) is the one axis never touched (INSIGHTS P5,
+# open-frontier #1). Rice/Golomb is the optimal prefix code ONLY for an exactly
+# geometric residual; real EMG residual blocks deviate sub-Golomb, so a
+# table-driven ANS coder can recover the sub-Golomb fraction and approach the
+# true block entropy. This candidate keeps the incumbent's front-end verbatim
+# (grid-parent cross-channel decorrelation with the same fixed-point beta, then
+# the order-8 sign-sign LMS temporal predictor) and swaps ONLY the per-channel
+# Rice coder for a table-driven tANS (LOCO-ANS style) -- a clean head-to-head
+# that isolates the back-end's marginal bits on the identical predictor.
+#
+# tANS realization (FPGA-friendly: table lookups + renorm, NO per-symbol divide
+# on the runtime path; the divisions live only in the once-per-block table
+# build). The residual coder is a LOCO-ANS-style bucket+remainder split:
+#   * zigzag the residual to u >= 0, split into a "category" c = bit-length(u)
+#     (the exponent/bucket, a small bounded alphabet) and c-1 raw "mantissa"
+#     bits (the low bits of u). Only the category is entropy-coded; the mantissa
+#     bits are near-uniform and shipped raw -- exactly the LOCO-ANS structure
+#     that keeps the ANS alphabet small and bounded for ANY int16 input.
+#   * Per bounded block (ANS_BLOCK samples) a STATIC normalized frequency table
+#     over the categories is built (counts -> integer-normalized to sum = 2^R),
+#     shipped as tiny side-info, and used to build the tANS encode/decode
+#     tables. The table is deterministic and integer, so encoder and decoder
+#     build bit-identical tables from the shipped freqs.
+#   * tANS state is normalized to [2^R, 2^(R+1)); the tables are derived from
+#     the bitwise-rANS transition C(x,s) = (x//f_s)*M + cum_s + (x mod f_s) but
+#     PRECOMPUTED per state (symbol, #renorm-bits, base) so the runtime coder is
+#     pure table lookups + a variable-length bit renorm -- the tANS/LOCO-ANS
+#     property (no per-symbol division at encode/decode time).
+#   * The encoder runs the ANS pass in REVERSE over the block (the reverse-order
+#     encode buffer LOCO-ANS/tANS require) and the decoder reads the bitstream
+#     forward; ordering is reconciled by reversing the emitted bit list once.
+# Embeddability is borderline BY DESIGN (P5): the per-block frequency table is
+# real side-info and the reverse pass needs a block buffer, so the payoff is
+# expected small and uncertain -- a refinement to MEASURE on real data, not a
+# headline lever. Bounded look-ahead = one ANS_BLOCK (streaming-legal).
+# ===========================================================================
+ANS_MAGIC = 0x414E           # 'AN'
+ANS_R = 10                   # tANS table log; table size M = 2**R = 1024
+ANS_BLOCK = 2048             # static-frequency-table block (samples); bounded look-ahead
+
+
+def _ans_bitlen(u):
+    """Integer bit-length of each element of a uint64 array (0 -> 0). Pure
+    integer (no float log), identical on encode and decode."""
+    u = u.astype(np.uint64)
+    c = np.zeros(u.size, np.int64)
+    tmp = u.copy()
+    while tmp.any():
+        c += (tmp > 0).astype(np.int64)
+        tmp = tmp >> np.uint64(1)
+    return c
+
+
+def _ans_normalize(counts, R):
+    """Integer-normalize category counts to a frequency table summing to 2**R,
+    with every used symbol getting freq >= 1 (so it stays encodable) and unused
+    symbols freq 0. Runs ONLY in the encoder; the decoder reads the resulting
+    freqs verbatim, so no cross-side determinism issue -- the shipped table is
+    the single source of truth for both sides' identical table build."""
+    M = 1 << R
+    counts = np.asarray(counts, np.int64)
+    total = int(counts.sum())
+    freq = np.zeros(counts.size, np.int64)
+    for s in np.flatnonzero(counts > 0):
+        f = (int(counts[s]) * M) // total
+        freq[s] = f if f > 0 else 1
+    diff = M - int(freq.sum())               # small: |diff| <= #used symbols
+    while diff > 0:                           # give surplus to the commonest symbol
+        freq[int(np.argmax(counts))] += 1
+        diff -= 1
+    while diff < 0:                           # reclaim from a symbol with slack (freq>1)
+        freq[int(np.argmax(np.where(freq > 1, freq, -1)))] -= 1
+        diff += 1
+    return freq
+
+
+def _ans_build(freq, R, build_enc=True):
+    """Build the tANS tables from a frequency table (sum = 2**R). Returns per-
+    state decode tables (symbol `symt`, renorm-bit-count `nb`, renorm `base`,
+    each length M) and, for the encoder, `enc_slot[s]` mapping the current state
+    (x-M) to the destination slot. Derived from the bitwise-rANS transition but
+    precomputed so the runtime coder never divides. Deterministic + integer:
+    encode and decode build bit-identical tables from the same freqs."""
+    M = 1 << R
+    A = len(freq)
+    cum = np.zeros(A + 1, np.int64)
+    for s in range(A):
+        cum[s + 1] = cum[s] + int(freq[s])
+    symt = np.empty(M, np.int64)
+    for s in range(A):
+        if freq[s] > 0:
+            symt[cum[s]:cum[s + 1]] = s          # cumulative (range-ANS) layout
+    nb = np.empty(M, np.int64)
+    base = np.empty(M, np.int64)
+    for t in range(M):
+        s = int(symt[t])
+        x_pre = int(freq[s]) + (t - int(cum[s]))  # rANS C^{-1} state, in [f_s, 2 f_s)
+        b = R - (x_pre.bit_length() - 1)          # renorm bits to lift into [M, 2M)
+        nb[t] = b
+        base[t] = x_pre << b                      # renorm base, in [M, 2M)
+    enc_slot = None
+    if build_enc:
+        enc_slot = {s: np.empty(M, np.int64) for s in range(A) if freq[s] > 0}
+        for t in range(M):
+            s = int(symt[t])
+            lo = int(base[t]) - M
+            enc_slot[s][lo:lo + (1 << int(nb[t]))] = t
+    return symt, nb, base, enc_slot
+
+
+def _ans_encode_cats(cats, freq):
+    """Reverse-order tANS encode of a category block. Returns (X0, packed bytes).
+    State X stays in [M, 2M); bits are emitted LSB-first then the whole list is
+    reversed once so the decoder can read them forward (ANS is LIFO)."""
+    R, M = ANS_R, 1 << ANS_R
+    _symt, nb, base, enc_slot = _ans_build(freq, R, build_enc=True)
+    emit = []
+    X = M                                     # canonical start = decoder's final state
+    for s in reversed(cats.tolist()):
+        t = int(enc_slot[s][X - M])
+        b = X - int(base[t])                  # the nb[t] renorm bits (in [0, 2**nb[t]))
+        for j in range(int(nb[t])):
+            emit.append((b >> j) & 1)
+        X = M + t
+    X0 = X                                     # decoder's initial state
+    packed = np.packbits(np.array(emit[::-1], np.uint8)).tobytes() if emit else b""
+    return X0, packed
+
+
+def _ans_decode_cats(X0, ans_bytes, n, freq):
+    """Forward tANS decode of `n` categories from the (reversed) bitstream."""
+    R, M = ANS_R, 1 << ANS_R
+    symt, nb, base, _ = _ans_build(freq, R, build_enc=False)
+    bits = (np.unpackbits(np.frombuffer(ans_bytes, np.uint8))
+            if len(ans_bytes) else np.zeros(0, np.uint8))
+    cats = np.empty(n, np.int64)
+    X = int(X0)
+    p = 0
+    for i in range(n):
+        t = X - M
+        cats[i] = int(symt[t])
+        val = 0
+        for _ in range(int(nb[t])):           # MSB-first (reconciles the reversal)
+            val = (val << 1) | int(bits[p]); p += 1
+        X = int(base[t]) + val
+    return cats
+
+
+def _ans_encode_block(res_blk):
+    """Encode one residual block: category tANS + raw mantissa bits + freq table."""
+    u = ec.zigzag(res_blk.astype(np.int64))
+    cats = _ans_bitlen(u)
+    cmax = int(cats.max())
+    widths = np.maximum(cats - 1, 0)                       # c-1 mantissa bits (0 for c<=1)
+    base_val = np.where(cats >= 1, np.left_shift(np.int64(1), widths), np.int64(0))
+    mant = u.astype(np.int64) - base_val                  # low bits of u
+    total_bits = int(widths.sum())
+    if total_bits:
+        starts = np.concatenate(([0], np.cumsum(widths)[:-1])).astype(np.int64)
+        mbits = np.zeros(total_bits, np.uint8)
+        for j in range(int(widths.max())):                # LSB-first, vectorized
+            sel = widths > j
+            mbits[starts[sel] + j] = ((mant[sel] >> np.int64(j)) & 1).astype(np.uint8)
+        mpacked = np.packbits(mbits).tobytes()
+    else:
+        mpacked = b""
+    freq = _ans_normalize(np.bincount(cats, minlength=cmax + 1), ANS_R)
+    X0, ans_packed = _ans_encode_cats(cats, freq)
+    return (struct.pack("<B", cmax) + freq.astype("<u2").tobytes()
+            + struct.pack("<H", X0)
+            + struct.pack("<I", len(ans_packed)) + ans_packed
+            + struct.pack("<I", len(mpacked)) + mpacked)
+
+
+def _ans_decode_block(buf, off, n):
+    (cmax,) = struct.unpack_from("<B", buf, off); off += 1
+    freq = np.frombuffer(buf, "<u2", cmax + 1, off).astype(np.int64); off += 2 * (cmax + 1)
+    (X0,) = struct.unpack_from("<H", buf, off); off += 2
+    (ans_len,) = struct.unpack_from("<I", buf, off); off += 4
+    ans_bytes = buf[off:off + ans_len]; off += ans_len
+    (mant_len,) = struct.unpack_from("<I", buf, off); off += 4
+    mant_bytes = buf[off:off + mant_len]; off += mant_len
+    cats = _ans_decode_cats(X0, ans_bytes, n, freq)
+    widths = np.maximum(cats - 1, 0)
+    mant = np.zeros(n, np.int64)
+    if int(widths.sum()):
+        mbits = np.unpackbits(np.frombuffer(mant_bytes, np.uint8))
+        starts = np.concatenate(([0], np.cumsum(widths)[:-1])).astype(np.int64)
+        for j in range(int(widths.max())):
+            sel = widths > j
+            mant[sel] |= (mbits[starts[sel] + j].astype(np.int64) << np.int64(j))
+    base_val = np.where(cats >= 1, np.left_shift(np.int64(1), widths), np.int64(0))
+    u = (base_val + mant).astype(np.uint64)
+    return ec.unzigzag(u), off
+
+
+def _ans_encode_1d(res):
+    """tANS entropy-code a 1-D residual channel, static freq table per ANS_BLOCK.
+    Same call signature/role as ec.rice_encode_1d -> a drop-in back-end swap."""
+    res = np.asarray(res, np.int64)
+    n_total = res.size
+    out = [struct.pack("<I", n_total)]
+    for s in range(0, n_total, ANS_BLOCK):
+        out.append(_ans_encode_block(res[s:s + ANS_BLOCK]))
+    return b"".join(out)
+
+
+def _ans_decode_1d(buf, off):
+    (n_total,) = struct.unpack_from("<I", buf, off); off += 4
+    res = np.empty(n_total, np.int64)
+    pos = 0
+    while pos < n_total:
+        n = min(ANS_BLOCK, n_total - pos)
+        blk, off = _ans_decode_block(buf, off, n)
+        res[pos:pos + n] = blk
+        pos += n
+    return res, off
+
+
+def ans_encode(x, cols=16):
+    """LMS+xchan front-end IDENTICAL to the incumbent 'LMS+Rice+xchan'
+    (ec.grid_parents/cross_betas/cross_forward + order-8 sign-sign LMS); only
+    the per-channel entropy back-end is tANS instead of Rice."""
+    x = np.asarray(x, np.int64)
+    C, N = x.shape
+    parent = ec.grid_parents(C, cols)
+    betas = ec.cross_betas(x, parent)
+    xt = ec.cross_forward(x, parent, betas)
+    res = ec.lms_forward(xt)
+    body = b"".join(_ans_encode_1d(res[c]) for c in range(C))
+    hdr = struct.pack("<HHII", ANS_MAGIC, cols, C, N)
+    side = betas.astype("<i2").tobytes()          # same beta side-info as the incumbent
+    return hdr + side + body
+
+
+def ans_decode(buf):
+    magic, cols, C, N = struct.unpack_from("<HHII", buf, 0)
+    assert magic == ANS_MAGIC, "bad tANS codec magic"
+    off = 12
+    betas = np.frombuffer(buf, "<i2", C, off).astype(np.int64); off += 2 * C
+    res = np.empty((C, N), np.int64)
+    for c in range(C):
+        arr, off = _ans_decode_1d(buf, off)
+        res[c] = arr
+    xt = ec.lms_inverse(res)
+    x = ec.cross_inverse(xt, ec.grid_parents(C, cols), betas)
+    return x.astype(np.int16)
+
+
+# ===========================================================================
+# NEW candidate: Adaptive Common Average Reference (ACAR) rank-1 common-mode
+# front-end -- reversible-integer common-average removal + per-channel LMS + Rice.
+# ---------------------------------------------------------------------------
+# Every cross-channel front-end shipped so far removes a LOCAL, pairwise slice of
+# the cross-channel redundancy: +xchan/xadapt/bestpartner subtract ONE grid
+# neighbour with a gain; the (retired) iklt/iklt_adaptive rotate neighbour PAIRS.
+# None of them can fully cancel the GLOBAL common-mode component -- the single
+# signal shared by the WHOLE array (movement/EMG drive, power-line pickup,
+# reference/electrode drift) -- because a neighbour-difference cancels common mode
+# only to the extent the two neighbours share it, and leaves the array-wide DC
+# drift and any far-field shared source. Common Average Reference (CAR) is the
+# classic HD-EMG montage that removes exactly this: subtract the array mean from
+# every channel. This is a genuinely DISTINCT slice of the cross-channel mutual
+# information (INSIGHTS P1) from the neighbour subtracts -- a rank-1 GLOBAL lever,
+# not a pairwise one -- and it is near-free: one running cross-channel sum per
+# time sample plus one subtract, O(1)/sample-ch, RTL-trivial.
+#
+# Made lossless by a reversible-integer S-transform-style lift that codes the
+# array TOTAL as a virtual channel (subtracting the same mean from all channels is
+# rank-deficient -- it loses the array DC level -- so the lost degree of freedom
+# is preserved by keeping the exact total). Per time slice, over an ON block:
+#     S_t   = sum_c x[c,t]              (array total -- the virtual channel)
+#     CAR_t = floor(S_t / C)            (integer common average = weighted mean)
+#     y[0,t] = S_t                      (root slot carries the total, losslessly)
+#     y[c,t] = x[c,t] - CAR_t   (c>=1)  (residual = channel - round(CAR))
+# Inverse (exact): CAR_t = floor(y[0,t]/C); x[c,t]=y[c,t]+CAR_t (c>=1);
+#     x[0,t] = y[0,t] - sum_{c>=1} x[c,t].  All integer, per-time-slice, no
+# look-ahead. Channels 1..C-1 get TRUE mean-referenced CAR residuals (common mode
+# removed, only ~1/C of the aggregate noise added back); the single root channel
+# is inflated to the total -- the acknowledged rank-1 cost, paid on 1/C of the data.
+#
+# Gated per block, BACKWARD-ADAPTIVELY (INSIGHTS P4 -- zero side-info): block i is
+# transformed only if the common-mode is material in the PREVIOUS reconstructed
+# raw block, so the decoder recomputes the identical gate from already-restored
+# data. The gate fires iff C*sum(CAR^2)/sum(x^2) exceeds a threshold set ABOVE the
+# 1/C floor that independent per-channel noise produces just by array-averaging --
+# so it fires only on a genuine shared component and cannot hurt low-common-mode
+# segments (they pass through as identity). Block 0 bootstraps OFF (coded as-is),
+# and the basis then adapts each block. Behind the front-end: the SAME order-8
+# sign-sign LMS + adaptive Rice back-end as the whole family (only the spatial
+# front-end differs). Distinct from cycle-1 xadapt (per-block single-neighbour
+# beta) and cycle-2 bestpartner (a SELECTED neighbour): here the global array mean,
+# not any one channel. Basis: Vaisman/Jordanic/Farina adaptive common-average
+# filtering for HD-EMG (MBEC 2014, myocontrol/SNR benefit) -- unverified for
+# compression here.
+# ===========================================================================
+ACAR_MAGIC = 0x4341          # 'CA'
+ACAR_BLOCK = ec.BLOCK        # gate/adaptation block (aligns with the Rice block)
+ACAR_GATE_NUM = 1            # gate ON iff C*sum(CAR^2)/sum(x^2) > ACAR_GATE_NUM/DEN
+ACAR_GATE_DEN = 16           # threshold 1/16 ~ 2/C for C=32: above the noise floor
+
+
+def _acar_gate(xprev, C):
+    """Backward gate from the PREVIOUS raw block. ON iff the array common-mode is
+    material enough that removing it (from C-1 channels) pays for inflating the
+    root channel to the array total. Integer-only and deterministic, so encoder
+    and decoder -- which both reconstruct the raw previous block exactly -- derive
+    the identical decision. ON iff C*sum(CAR^2) * DEN > sum(x^2) * NUM, with
+    CAR = floor(sum_c x / C). The threshold sits above the 1/C level that pure
+    independent noise produces by channel-averaging, so it fires only on a genuine
+    shared component. (Sums over <=256 samples of <=32 int16 -> |S|<2^21, CAR^2
+    summed over the block < 2^50, times C*DEN < 2^60: inside int64.)"""
+    xp = xprev.astype(np.int64)
+    S = xp.sum(axis=0)                      # array total per time sample
+    car = np.floor_divide(S, C)             # integer common average (floor)
+    cm_pow = int((car * car).sum())
+    tot_pow = int((xp * xp).sum())
+    return cm_pow * C * ACAR_GATE_DEN > tot_pow * ACAR_GATE_NUM
+
+
+def _acar_forward(x, cols, B=ACAR_BLOCK):
+    """Reversible-integer common-average removal, per time-block. ON blocks put the
+    array total in the root slot and channel-minus-CAR in the rest; OFF blocks pass
+    through unchanged. Returns the transformed [C, N] int64 array. (cols is unused
+    -- CAR spans the whole array, grid-agnostic -- but kept for interface parity.)"""
+    C, N = x.shape
+    x = x.astype(np.int64)
+    y = x.copy()
+    nblocks = (N + B - 1) // B
+    for i in range(nblocks):
+        s, e = i * B, min((i + 1) * B, N)
+        on = False if i == 0 else _acar_gate(x[:, (i - 1) * B:i * B], C)
+        if not on:
+            continue                        # identity: low-common-mode block
+        blk = x[:, s:e]
+        S = blk.sum(axis=0)                 # array total per time slice
+        car = np.floor_divide(S, C)         # common average (floor)
+        y[0, s:e] = S                       # root slot carries the virtual total
+        y[1:, s:e] = blk[1:] - car          # residuals = channel - round(CAR)
+    return y
+
+
+def _acar_inverse(y, cols, B=ACAR_BLOCK):
+    """Invert _acar_forward. Rebuilds raw x block-by-block in time order; before
+    block i is inverted, raw block i-1 is already restored, so the same backward
+    gate is recomputed and the lift is undone exactly."""
+    C, N = y.shape
+    y = y.astype(np.int64)
+    x = y.copy()
+    nblocks = (N + B - 1) // B
+    for i in range(nblocks):
+        s, e = i * B, min((i + 1) * B, N)
+        on = False if i == 0 else _acar_gate(x[:, (i - 1) * B:i * B], C)
+        if not on:
+            continue
+        S = y[0, s:e]
+        car = np.floor_divide(S, C)
+        x[1:, s:e] = y[1:, s:e] + car               # restore channels 1..C-1
+        x[0, s:e] = S - x[1:, s:e].sum(axis=0)       # root = total - the rest
+    return x
+
+
+def acar_encode(x, cols=16):
+    x = np.asarray(x, np.int64)
+    C, N = x.shape
+    y = _acar_forward(x, cols)
+    res = ec.lms_forward(y)                  # order-8 sign-sign LMS (same as family)
+    body = b"".join(ec.rice_encode_1d(res[c]) for c in range(C))
+    hdr = struct.pack("<HHII", ACAR_MAGIC, cols, C, N)   # NO side-info (backward gate)
+    return hdr + body
+
+
+def acar_decode(buf):
+    magic, cols, C, N = struct.unpack_from("<HHII", buf, 0)
+    assert magic == ACAR_MAGIC, "bad ACAR codec magic"
+    off = 12
+    res = np.empty((C, N), np.int64)
+    for c in range(C):
+        arr, off = ec.rice_decode_1d(buf, off)
+        res[c] = arr
+    y = ec.lms_inverse(res)
+    x = _acar_inverse(y, cols)
+    return x.astype(np.int16)
+
+
+# ===========================================================================
 # Uniform codec objects + the registry
 # ===========================================================================
 class Codec:
@@ -717,12 +1285,147 @@ _register(Codec("LMS+Rice+iklt", iklt_encode, iklt_decode, CodecMeta(
                     "only +8.8% real xchan gain vs single-neighbour subtract's +18.0%. "
                     "experiments/002_lms_rice_iklt.md, cycle 2026-07-13."))
 
+# NEW candidate (this cycle): DATA-DEPENDENT adaptive integer-lifting rotation
+# cascade (backward-adaptive Givens angle). Same rotation cascade as the retired
+# iklt (~24 ops/sample-ch of 3-lift shears), PLUS a backward angle estimate: per
+# schedule pair, accumulate three running dot-products (saa,sbb,sab ~ 3 macs/
+# sample-ch over the previous block) and, once per block, an argmin over the
+# 31-entry angle table (amortised ~31/256 ~ 0.1 op/sample-ch). The decoder
+# RECOMPUTES the same angle (it is not transmitted), so dec_ops == enc_ops.
+# State adds, on top of the LMS weights, the three int64 covariance accumulators
+# for the pair a channel is currently in (24 B) + the current angle index (~1 B).
+_ITSKLT_XTRA = 4    # 3 covariance-accumulate macs + amortised per-block argmin
+_ITSKLT_STATE = _LMS_STATE + 26
+_ITSKLT_NOTE = (
+    "backward-adaptive DATA-DEPENDENT integer-lifting Givens rotation cascade. "
+    "Keeps the retired iklt's multiplierless reversible 3-lift shear butterfly "
+    "(lossless for ANY integer lift coeffs) but the rotation ANGLE per grid-"
+    "neighbour pair per time-block is chosen from the pair's 2x2 covariance over "
+    "the PREVIOUS reconstructed RAW block: the tabulated (31 angles, -60..60deg) "
+    "theta minimizing the post-rotation off-diagonal |0.5(sbb-saa)sin2t+sab cos2t|,"
+    " via an integer sin/cos table (no atan, no eigendecomposition, no float in "
+    "the codec path). theta[block i] uses only raw block i-1 which the decoder "
+    "reconstructs before it reaches block i -> zero side-info, look-ahead 0, "
+    "decoder recomputes the angle. Block 0 bootstraps to identity (theta=0). "
+    "Cascaded over all horizontal then all vertical adjacent pairs (=_iklt_pairs) "
+    "-> multi-tap, distinct from the rank-1 single-neighbour subtract. Then the "
+    "unchanged order-8 sign-sign LMS + adaptive Rice back-end (only the spatial "
+    "basis differs from the retired fixed-45deg iklt).")
+_register(Codec("LMS+Rice+iklt_adaptive", itsklt_encode, itsklt_decode, CodecMeta(
+    integer_only=True, enc_ops=_LMS_OPS + _IKLT_OPS + _ITSKLT_XTRA,
+    dec_ops=_LMS_OPS + _IKLT_OPS + _ITSKLT_XTRA,
+    state_bytes_per_ch=_ITSKLT_STATE, causal=True, lookahead_samples=0,
+    block_size=ITSKLT_BLOCK, notes=_ITSKLT_NOTE), family="cross-channel",
+    desc="data-dependent backward-adaptive integer-KLT (lifted Givens angle) "
+         "cascade + LMS + Rice",
+    retired=True,
+    retired_reason="Pareto-dominated by LMS+Rice+xchan on ALL 4 real sets "
+    "(cycle 2026-07-14, results/cycle_bench.csv): otb 1.885x/0.083 vs 2.143x/"
+    "0.057, hyser 1.352x vs 1.474x, capgmyo 1.326x vs 1.349x, cemhsey 1.761x vs "
+    "1.955x -- worse ratio AND higher cost everywhere. Backward-adaptive rotation "
+    "angle from the previous block is a stale/noisy estimate on non-stationary "
+    "HD-sEMG and the rotation corrupts BOTH channels, so it captures only "
+    "+1.7..+3.3% cross-channel gain (worse than even the retired fixed iklt). "
+    "See experiments/003_lms_rice_iklt_adaptive.md."))
+
 # NEW seeded candidate
 _register(Codec("fixed0-3+Rice", fixed_encode, fixed_decode, CodecMeta(
     integer_only=True, enc_ops=_FIXED_OPS, dec_ops=_FIXED_OPS,
     state_bytes_per_ch=_FIXED_STATE, causal=True, lookahead_samples=ec.BLOCK,
     block_size=ec.BLOCK), family="temporal",
     desc="FLAC fixed predictors ord 0-3, best-per-block + Rice"))
+
+# NEW candidate (this cycle): table-driven tANS entropy back-end vs Rice on the
+# IDENTICAL LMS+xchan predictor/front-end (INSIGHTS P5, open-frontier #1). Over
+# the incumbent LMS+xchan per-sample work, the tANS back-end adds, per sample-
+# ch: category bit-length (~3 ops), mantissa split (~2), one tANS table lookup +
+# a short variable-length bit renorm (~5), a category histogram accumulate (~1),
+# and the amortised per-block table build (2*M table entries / ANS_BLOCK ~ 1
+# op/sample-ch) -> ~+12 ops over Rice. Decode is symmetric (also table lookups +
+# renorm, no per-symbol divide), so dec_ops == enc_ops. The runtime path is
+# division-free; the only divides are in the once-per-block freq normalization
+# and table build. Persistent state adds, on top of the LMS+xchan state, the
+# per-block category frequency table (~90 B) and Rice-k-equivalent bookkeeping;
+# the M-entry tANS lookup tables and the ANS_BLOCK reverse-encode symbol buffer
+# are SHARED working memory (rebuilt per block, not multiplied per channel) --
+# noted, not charged per-channel. Bounded look-ahead = one ANS_BLOCK.
+_ANS_XTRA = 12
+_ANS_STATE = _LMS_STATE + _XCHAN_STATE + 90     # + per-block freq table (side-info)
+_ANS_NOTE = (
+    "table-driven tANS (LOCO-ANS style) entropy back-end swapped in for adaptive "
+    "Golomb-Rice on the IDENTICAL LMS+Rice+xchan predictor and cross-channel "
+    "front-end (same grid-parent beta side-info) -- a clean head-to-head that "
+    "isolates the back-end's marginal bits (INSIGHTS P5). Residual coder is a "
+    "LOCO-ANS bucket+remainder split: zigzag u, entropy-code the category "
+    "c=bit-length(u) with tANS, ship c-1 raw mantissa bits (bounds the ANS "
+    "alphabet for any int16 input). Per ANS_BLOCK a STATIC integer-normalized "
+    "category frequency table (sum=2**R, R=10) is built and shipped as tiny "
+    "side-info; both sides build bit-identical tANS tables from it. tANS state "
+    "normalized to [M,2M); transitions PRECOMPUTED from the bitwise-rANS map so "
+    "the runtime coder is table lookups + a variable bit renorm with NO per-"
+    "symbol divide (the FPGA-friendly property; divides live only in the once-"
+    "per-block table build). Encoder runs the ANS pass in reverse over the block "
+    "(reverse-order encode buffer), decoder reads forward. Look-ahead = one "
+    "ANS_BLOCK; the incumbent's whole-signal float beta remains a port caveat "
+    "(front-end unchanged). Payoff expected small/uncertain -- a back-end "
+    "refinement to MEASURE on real data, not a headline lever (P5).")
+_register(Codec("LMS+Rice+xchan_tans", ans_encode, ans_decode, CodecMeta(
+    integer_only=True, enc_ops=_LMS_OPS + _XCHAN_OPS + _ANS_XTRA,
+    dec_ops=_LMS_OPS + _XCHAN_OPS + _ANS_XTRA,
+    state_bytes_per_ch=_ANS_STATE, causal=True, lookahead_samples=ANS_BLOCK,
+    block_size=ANS_BLOCK, notes=_ANS_NOTE), family="entropy-backend",
+    desc="LMS + grid-neighbour decorrelation + table-driven tANS residual coder "
+         "(vs Rice, same predictor)",
+    retired=True,
+    retired_reason="Pareto-dominated by LMS+Rice+xchan (same front-end, Rice "
+    "back-end) on ALL 4 real sets (cycle 2026-07-14, results/cycle_bench.csv): "
+    "tANS is 1.4..1.8% SMALLER ratio at ~2x cost (0.109 vs 0.057) -- otb 2.103x "
+    "vs 2.143x, hyser 1.451x vs 1.474x, capgmyo 1.330x vs 1.349x, cemhsey 1.922x "
+    "vs 1.955x. Real HD-sEMG residuals are near-geometric, so Golomb-Rice is "
+    "already the near-optimal prefix code and the per-block category-freq table "
+    "side-info costs more than the sub-Golomb bits recovered (confirms INSIGHTS "
+    "P5). See experiments/004_lms_rice_xchan_tans.md."))
+
+# NEW candidate (this cycle): Adaptive Common Average Reference (ACAR). Over the
+# per-channel LMS+Rice work, the front-end adds, per sample-ch: one accumulate
+# into the running array total (~1 op), one subtract of the shared CAR (~1 op),
+# and an amortised floor-divide per time slice (1 divide / C ~ 0.03 op/sample-ch);
+# the backward gate re-accumulates two energy sums over the previous block (~2
+# macs/sample-ch) plus one comparison per block (amortised). ~4 extra ops over
+# plain LMS. The decoder RECOMPUTES the gate (not transmitted) and runs the exact
+# inverse lift, so dec_ops == enc_ops. The running array total and the two energy
+# accumulators are O(1) SHARED working state (one per time slice / per block, NOT
+# multiplied per channel) -- noted, not charged per-channel; per-channel state is
+# just the LMS weights plus the current gate flag.
+_ACAR_XTRA = 4     # accumulate-to-total + CAR subtract + amortised divide + gate macs
+_ACAR_STATE = _LMS_STATE + 2   # LMS weights + gate flag (array-sum/energy accs shared)
+_ACAR_NOTE = (
+    "Adaptive Common Average Reference: a reversible-integer S-transform-style "
+    "lift that removes the GLOBAL array common-mode (weighted mean across the "
+    "whole array) before the temporal predictor -- a rank-1 GLOBAL spatial lever, "
+    "distinct from the pairwise/single-neighbour subtracts of +xchan/xadapt/"
+    "bestpartner (a different slice of the cross-channel mutual information, "
+    "INSIGHTS P1). Per ON time-slice: S=sum_c x (array total), CAR=floor(S/C); the "
+    "root channel slot carries S (the virtual total channel -- preserves the array "
+    "DC that subtracting the mean from all channels would lose), every other "
+    "channel becomes x-CAR (true mean-referenced residual: common mode removed, "
+    "only ~1/C of the aggregate noise added). Inverse is exact and integer "
+    "(CAR=floor(S/C); x_c=y_c+CAR; x_0=S-sum_{c>=1}x_c), per-time-slice, "
+    "look-ahead 0. GATED per block BACKWARD-ADAPTIVELY: block i is transformed only "
+    "if C*sum(CAR^2)/sum(x^2) over the PREVIOUS reconstructed raw block exceeds "
+    "1/16 (~2/C, above the 1/C floor independent noise makes by array-averaging) -- "
+    "so it fires only on a genuine shared component, cannot hurt low-common-mode "
+    "blocks (identity pass-through), and ships ZERO side-info (the decoder "
+    "recomputes the gate). Block 0 bootstraps OFF. Then the unchanged order-8 "
+    "sign-sign LMS + adaptive Rice back-end (only the spatial front-end differs). "
+    "Basis: Vaisman/Jordanic/Farina adaptive CAR filtering for HD-EMG (MBEC 2014), "
+    "a myocontrol/SNR result -- unverified for compression here.")
+_register(Codec("LMS+Rice+acar", acar_encode, acar_decode, CodecMeta(
+    integer_only=True, enc_ops=_LMS_OPS + _ACAR_XTRA, dec_ops=_LMS_OPS + _ACAR_XTRA,
+    state_bytes_per_ch=_ACAR_STATE, causal=True, lookahead_samples=0,
+    block_size=ACAR_BLOCK, notes=_ACAR_NOTE), family="cross-channel",
+    desc="adaptive common-average reference (reversible-integer lift, backward-"
+         "gated) + LMS + Rice"))
 
 
 def list_codecs(include_retired=False):
