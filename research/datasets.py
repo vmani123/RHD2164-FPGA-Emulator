@@ -46,6 +46,11 @@ sys.path.insert(0, HOST)
 import gen_neural_mem as gnm  # noqa: E402
 
 CACHE = os.path.join(os.path.dirname(__file__), "..", "sim_data", "corpus")
+# Committed parsed-array cache: the int16 [C, N] each real source decodes to,
+# saved once and reused so a fresh clone never re-downloads. Unlike CACHE (raw
+# downloads: gitignored + wiped every ephemeral session), this dir is tracked in
+# git, so the corpus survives across sessions without touching the network.
+NPZ_CACHE = os.path.join(os.path.dirname(__file__), "..", "sim_data", "corpus_npz")
 
 # 16-bit ADC full-scale used when emulating a recording from float physical units.
 # Robust-peak -> ADC16_FS maps the signal onto ~15 bits (a realistic 16-bit ADC),
@@ -144,20 +149,39 @@ class Dataset:
         self.note = note
         self._available = available   # None => probe on load
 
+    def _cache_path(self):
+        return os.path.join(NPZ_CACHE, self.name + ".npz")
+
+    def _load_from_source(self):
+        if self.kind == "wfdb":
+            return self._load_wfdb()
+        if self.kind == "otb":
+            return self._load_otb()
+        if self.kind == "capgmyo":
+            return self._load_capgmyo()
+        if self.kind == "cemhsey":
+            return self._load_cemhsey()
+        raise ValueError(f"unknown dataset kind {self.kind!r}")
+
     # -- loaders return (x int16 [C, N], grid) ------------------------------
     def load(self, max_samples=0):
+        # Synthetic is seed-deterministic and cheap -- always regenerate, never
+        # cache to disk. Every real set is parsed once from its source and cached
+        # as int16 in the committed NPZ_CACHE, so subsequent loads (including in a
+        # fresh clone) reuse the array instead of re-downloading. The full parsed
+        # record is cached; max_samples truncation happens after, so any sample
+        # cap is served from the one cache.
         if self.kind == "synthetic":
             x = self._load_synthetic()
-        elif self.kind == "wfdb":
-            x = self._load_wfdb()
-        elif self.kind == "otb":
-            x = self._load_otb()
-        elif self.kind == "capgmyo":
-            x = self._load_capgmyo()
-        elif self.kind == "cemhsey":
-            x = self._load_cemhsey()
         else:
-            raise ValueError(f"unknown dataset kind {self.kind!r}")
+            cp = self._cache_path()
+            if os.path.exists(cp):
+                with np.load(cp) as z:
+                    x = z["x"]
+            else:
+                x = np.ascontiguousarray(self._load_from_source(), dtype=np.int16)
+                os.makedirs(NPZ_CACHE, exist_ok=True)
+                np.savez_compressed(cp, x=x)
         if max_samples and x.shape[1] > max_samples:
             x = x[:, :max_samples]
         return x.astype(np.int16), self.grid
@@ -294,6 +318,9 @@ class Dataset:
 
     def available(self):
         if self.kind == "synthetic":
+            return True
+        # A committed parsed cache means the set is available offline, forever.
+        if os.path.exists(self._cache_path()):
             return True
         if self._available is not None:
             return self._available

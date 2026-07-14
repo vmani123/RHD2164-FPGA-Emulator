@@ -38,9 +38,19 @@ or edit anything.
    orchestrator will put in `research/registry.py`. Retirement means "stop
    re-benchmarking/re-reporting it every cycle," never "delete it" — the code
    and its self-test coverage stay for reproducibility.
-6. **Next hypotheses** — 2–3 concrete, testable, ranked by expected payoff, each
+6. **Distill a learning into `research/INSIGHTS.md`** — the highest-signal
+   deliverable for future cycles. For each candidate, append or refine the relevant
+   principle: what the **real-data** result proved about which mechanism works and
+   **why**, in compression-theory terms (entropy / mutual information / predictor
+   order / basis-match / side-info) — never just the number. Move conclusively
+   dominated candidates to the "Dead ends" list with their theoretical reason; keep
+   the "Open frontier" ranking current. A learning enters INSIGHTS.md only when
+   measured on real data. This is separate from, and higher-signal than, the raw
+   CYCLE_LOG row and the experiment record.
+7. **Next hypotheses** — 2–3 concrete, testable, ranked by expected payoff, each
    naming the one knob to change (predictor family/order, k-window, Rice vs. range,
-   channel-pairing topology, transform, block size) and why the data suggests it.
+   channel-pairing topology, transform, block size) and why the data suggests it,
+   consistent with the refreshed INSIGHTS.md frontier.
 
 ## Rules
 - **Read-only.** Propose; don't implement. Don't edit `LEADERBOARD.md` or

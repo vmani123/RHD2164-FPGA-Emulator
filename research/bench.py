@@ -96,10 +96,15 @@ def run(datasets, max_samples, csv_path, include_retired=False):
               ", ".join(c.name for c in reg.list_retired()) + ")")
     all_rows = []
     for ds in datasets:
-        if not ds.available():
-            print(f"\n### {ds.name}: pending (unavailable here) -- skipped")
+        # Attempt the load rather than pre-filtering on available(): a real set
+        # that isn't cached yet downloads on demand, and we skip only on a
+        # genuine failure (with the reason), never because the cache happens to
+        # be empty in a fresh session.
+        try:
+            x, grid = ds.load(max_samples=max_samples)
+        except Exception as e:
+            print(f"\n### {ds.name}: unavailable -- skipped ({e})")
             continue
-        x, grid = ds.load(max_samples=max_samples)
         cols = grid[1]
         is_real = ds.kind != "synthetic"
         print(f"\n### {ds.name}  [{x.shape[0]} ch x {x.shape[1]} samp @ {ds.fs:.0f} Hz, "

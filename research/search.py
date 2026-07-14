@@ -20,10 +20,11 @@ bit-exact round-trip on every evaluation (non-negotiable #1). Numbers come from
 measured encoded size, never from reasoning (#4). Ranking uses the ratio-vs-cost
 Pareto front, never ratio alone (#2).
 
-Real data decides (#3); real datasets are network-blocked in this container, so
-the search runs on the synthetic corpus (spatial-corr 0.3/0.6/0.9) as a
-mechanism/infrastructure demonstration. Re-run on Hyser once the host is
-reachable: `--datasets hyser_1dof_f1_s1`.
+Real data decides (#3). The real corpus (Hyser, OTB, CapgMyo, CEMHSEY) is cached
+parsed-and-committed under sim_data/corpus_npz/, so it loads offline in any fresh
+session; an uncached set downloads on demand. The default here is still the
+synthetic sweep (spatial-corr 0.3/0.6/0.9) for a controlled mechanism demo -- pass
+`--datasets hyser_1dof_f1_s1` (or any real set) to search on real data.
 
 Usage:
     python3 research/search.py                     # hill-climb + ablation + Pareto
@@ -270,15 +271,20 @@ def main():
     datasets_xy = []
     for name in args.datasets:
         ds = sets.get(name)
-        if ds is None or not ds.available():
-            print(f"skip {name}: unavailable here")
+        if ds is None:
+            print(f"skip {name}: unknown dataset")
             continue
-        x, grid = ds.load(max_samples=args.max_samples)
+        # Attempt the load (downloads/caches on demand); skip only on genuine
+        # failure, never because a fresh session's cache is empty.
+        try:
+            x, grid = ds.load(max_samples=args.max_samples)
+        except Exception as e:
+            print(f"skip {name}: unavailable ({e})")
+            continue
         datasets_xy.append((name, x, grid[1]))
     if not datasets_xy:
         sys.exit("no datasets available to search")
-    real = any(dsmod.corpus() and d.kind != "synthetic"
-               for d in sets.values() if d.name in args.datasets and d.available())
+    real = any(sets[n].kind != "synthetic" for n, _, _ in datasets_xy)
     print(f"searching on {[n for n, _, _ in datasets_xy]}  "
           f"({'REAL' if real else 'SYNTHETIC — infrastructure demo, not a headline'})\n")
 

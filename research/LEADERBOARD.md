@@ -6,7 +6,7 @@ produced by the harness (`research/bench.py` + `research/search.py`), asserted
 bit-exact, and gated by `embedded_ok` — never by reasoning (non-negotiables #1,
 #2, #4). Maintained per Stage 6 of `../COMPRESSION_RESEARCH_AGENT_PROMPT.md`.
 
-_Updated: 2026-07-13 · branch `compression-wip`. Cycles 1 & 2 (2026-07-08,
+_Updated: 2026-07-14 · branch `compression-cycle-2026-07-13`. Cycles 1 & 2 (2026-07-08,
 2026-07-10) merged. `LMS+Rice+xchan_adaptive` is now marked `retired=True` in
 `research/registry.py` (conclusively Pareto-dominated — kept, bit-exact,
 excluded from the default `bench.py` sweep and this table's headline rows;
@@ -136,6 +136,91 @@ on OTB) — dominated by the incumbent, not promoted. This cycle's best-partner
 selection is a different mechanism (which neighbour, not how the beta adapts)
 and is the first candidate this research loop has produced that is genuinely
 non-dominated vs. the incumbent on real data.
+
+## Cycle 2026-07-13 — fixed integer-KLT multi-tap front-end (SURVEY rec #3) — RETIRED
+
+Hyser/CEMHSEY/CapgMyo were network-unreachable this session; `otb_hdsemg_vl` was
+the only real dataset reachable, so this cycle's results are OTB-only (Hyser
+headline numbers above are unchanged from the last session that could reach it).
+This cycle also uses an **8 000-sample** OTB window (`results/cycle_bench.csv`),
+so its incumbent measures 2.24× here vs 2.14× at 15 000 samp above — compare
+candidates only *within* the same run.
+
+New codec `LMS+Rice+iklt`: a fixed, data-independent, multiplierless reversible
+integer inter-channel transform (integer-KLT via 3-step lifting/Givens rotations
+at θ=45°) as a **multi-tap** spatial front-end ahead of the unchanged per-channel
+LMS+Rice. **Verifier split — A REJECT, B PROMOTE → held for human review, NOT
+promoted.** It is also **conclusively Pareto-dominated on real data and RETIRED**
+(`retired=True` in `research/registry.py`; kept bit-exact, excluded from the
+default sweep, `--include-retired` re-checks it).
+
+Real `otb_hdsemg_vl` (64 ch, 5×13, 8 000 samp — bit-exact, `embedded_ok`):
+
+| codec | ratio | cost | note |
+|---|---:|---:|---|
+| LMS+Rice+xchan_bestpartner | 2.25× | 0.063 | max-ratio corner (dominates iklt) |
+| **LMS+Rice+xchan** (incumbent) | **2.24×** | **0.057** | best embeddable — **dominates iklt** |
+| delta+Rice+xchan | 2.19× | 0.013 | cheapest xchan (dominates iklt) |
+| LMS+Rice+iklt | **2.07×** | **0.068** | **candidate — highest cost, 4th ratio** |
+| LMS+Rice (xchan-off baseline) | 1.90× | 0.052 | temporal only |
+
+- **Attribution:** temporal predictor and Rice back-end are byte-identical to the
+  incumbent, so the only lever changed is the cross-channel front-end. The fixed
+  integer-KLT captures only **+8.8%** achieved cross-channel gain on real data
+  (iklt 2.07× / LMS+Rice 1.90×) — **roughly half** the single-neighbour subtract's
+  **+18.0%**. It lands −7.78% below the incumbent (2.07× vs 2.24×).
+- **Mechanism:** a fixed 45° butterfly is the exact KLT only under the equal-variance
+  *isotropic* model. Real HD-sEMG inter-electrode covariance is anisotropic and
+  non-stationary, so the fixed rotation is mismatched while the incumbent's
+  data-dependent single-neighbour beta tracks the actual pairwise correlation. The
+  synthetic sweep confirms the pattern at every correlation (iklt +5.9%/+10.4% vs
+  xchan +9.4%/+19.1% at sc0.6/sc0.9).
+- **Pareto:** dominated on real data by three registered codecs (LMS+Rice+xchan
+  2.24×/0.057, bestpartner 2.25×/0.063, delta+Rice+xchan 2.19×/0.013 — each higher
+  ratio AND lower cost). Not on the front → RETIRED.
+- **Sanity:** max real ratio 2.25× ≪ 6× ceiling (no leak); no FAIL bit-exact rows
+  (all `ok=True`, iklt round-trip OK, `neural_ok`); incumbent unchanged (no
+  regression to the recorded best).
+- **Negative result, kept honest:** a fixed *data-independent* multi-tap transform
+  does not beat *adaptive* single-neighbour subtraction on real anisotropic HD-sEMG.
+  The spatial gain lives in the data-dependent pairwise weight, not in a wider fixed
+  basis. Port recommendation below is **unchanged**. Full record:
+  `experiments/002_lms_rice_iklt.md`.
+
+## Cycle 2026-07-14 — three distinct front-ends: adaptive rotation, tANS back-end, global CAR
+
+All four real sets reachable and benched at 15 000 samples (`results/cycle_bench.csv`);
+incumbent numbers reproduce the headline exactly (Hyser `LMS+Rice+xchan` 1.474×, OTB 2.143×).
+Three genuinely distinct candidates, **all double-verified PROMOTE (no splits)**, **none
+promoted** (none beats the current best on real data), **two retired**:
+
+| candidate | mechanism | real result (Hyser / OTB / CEMHSEY / CapgMyo) | cost | verdict |
+|---|---|---|---:|---|
+| `LMS+Rice+iklt_adaptive` | data-dependent adaptive integer-KLT rotation (multi-tap) | 1.352× / 1.885× / 1.761× / 1.326× | 0.083 | **RETIRED** — dominated on all 4 |
+| `LMS+Rice+xchan_tans` | tANS entropy back-end vs Rice (same front-end) | 1.451× / 2.103× / 1.922× / 1.330× | 0.109 | **RETIRED** — dominated on all 4 |
+| `LMS+Rice+acar` | global common-average-reference lift (rank-1 common-mode) | 1.363× / 2.089× / 1.743× / 1.332× | 0.056 | **kept** — non-dominated corner on OTB/CapgMyo |
+
+- **`iklt_adaptive` (open-frontier #2, data-dependent multi-tap).** Isolated cross-channel gain
+  only **+1.7–3.3%** on real data (−0.5% CapgMyo) vs the single-neighbour subtract's +10.8–17.4%
+  — *worse* than the retired fixed iklt. A backward-estimated rotation angle is stale/noisy on
+  non-stationary HD-sEMG and, being energy-preserving, corrupts *both* channels; the rank-1
+  subtract is the more robust decorrelator. Conclusively Pareto-dominated by `LMS+Rice+xchan`
+  (higher ratio AND lower cost) on all 4 real sets → RETIRED.
+- **`xchan_tans` (open-frontier #1, entropy back-end — the axis never tested in 4 cycles).**
+  With the front-end held identical, tANS is **1.4–1.8% SMALLER than Rice at ~2× cost** on every
+  real set. Real HD-sEMG residuals are near-geometric, so Rice is already at the entropy floor and
+  the per-block ANS table is a net loss (confirms P5). Conclusively dominated → RETIRED. **The
+  entropy back-end is now a proven-negative, spent lever.**
+- **`acar` (global common-mode, a new MI slice).** Captures **+14.4%** on the small tightly-coupled
+  64-ch OTB array (near the +17.4% single-neighbour gain) but collapses to +0.8–2.5% on the larger
+  128-/320-ch arrays where redundancy is *local*. Genuinely **non-dominated on OTB** (2.089×/0.0559,
+  *cheaper* than the incumbent) and CapgMyo → kept registered as a low-cost Pareto corner; dominated
+  by `delta+Rice+xchan` on Hyser/CEMHSEY. Not best → not promoted, not retired.
+- **Sanity:** max real ratio in the run 2.151× ≪ 6× ceiling; every row bit-exact (`ok=True`), all
+  `embedded_ok`/`neural_ok`; incumbent unchanged (no regression). Only `research/registry.py`
+  (retire flags), report files, and `SURVEY.md` touched; `rtl/`/`sim/` untouched.
+- **Port recommendation unchanged.** Two open-frontier levers are now spent; the live frontier
+  collapses onto variations of the adaptive rank-1 subtract (best-partner on order-4 first).
 
 ## Best embeddable after search (real Hyser)
 
