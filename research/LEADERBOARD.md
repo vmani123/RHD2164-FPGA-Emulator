@@ -6,13 +6,16 @@ produced by the harness (`research/bench.py` + `research/search.py`), asserted
 bit-exact, and gated by `embedded_ok` — never by reasoning (non-negotiables #1,
 #2, #4). Maintained per Stage 6 of `../COMPRESSION_RESEARCH_AGENT_PROMPT.md`.
 
-_Updated: 2026-07-14 · branch `compression-cycle-2026-07-13`. Cycles 1 & 2 (2026-07-08,
-2026-07-10) merged. `LMS+Rice+xchan_adaptive` is now marked `retired=True` in
-`research/registry.py` (conclusively Pareto-dominated — kept, bit-exact,
-excluded from the default `bench.py` sweep and this table's headline rows;
-`--include-retired` re-checks it on demand). From this point the loop targets
-2-3 genuinely distinct candidates per cycle instead of one; retirement is how
-dominated ones stop being re-benchmarked every time without deleting them._
+_Updated: 2026-07-16 · branch `compression-cycle-2026-07-16`. Cycles 1 & 2 (2026-07-08,
+2026-07-10) merged. **This cycle PROMOTED a new best: `LMS4+Rice+xchan_bestpartner`**
+(order-4 predictor under the best-partner front-end) — beats the prior incumbent on all
+4 real sets at lower cost, unanimous PROMOTE. Seven codecs are now `retired=True` in
+`research/registry.py` (conclusively Pareto-dominated — kept, bit-exact, excluded from the
+default `bench.py` sweep and this table's headline rows; `--include-retired` re-checks on
+demand): `xchan_adaptive`, `xchan_bestpartner` (order-8, dominated by its order-4 sibling
+this cycle), `iklt`, `iklt_adaptive`, `xchan_tans`, `xchan_multiparent`, `xctx`. The loop
+targets 2-3 genuinely distinct candidates per cycle; retirement is how dominated ones stop
+being re-benchmarked every time without deleting them._
 
 ## Headline (REAL data decides — #3)
 
@@ -27,7 +30,8 @@ Every set benched at **15 000 samples**; tables `results/06_real_bench.csv`
 | codec | ratio | %-of-FLAC | embedded_ok | note |
 |---|---:|---:|:--:|---|
 | lzma | 1.67× | 171% | ref | **offline**, not embeddable |
-| **LMS+Rice+xchan** | **1.47×** | **151%** | ✅ | **best embeddable** (registry default) |
+| **LMS4+Rice+xchan_bestpartner** | **1.480×** | **151%** | ✅ | **best embeddable — PROMOTED 2026-07-16** (order-4 + best-partner, cost 0.039) |
+| LMS+Rice+xchan | 1.474× | 151% | ✅ | prior best (order-8 single-parent, cost 0.057) |
 | delta+Rice+xchan | 1.45× | 149% | ✅ | cheapest xchan |
 | zstd-19 | 1.44× | 147% | ref | offline |
 | mtscomp | 1.41× | 145% | ref | neuro per-channel reference |
@@ -36,24 +40,24 @@ Every set benched at **15 000 samples**; tables `results/06_real_bench.csv`
 | LMS+Rice | 1.33× | 136% | ✅ | temporal only |
 | flac | 0.98× | 100% | ref | the target to beat (expands here) |
 
-**Embedded `LMS+Rice+xchan` (1.47×) beats every embeddable-feasible reference —
-WavPack 1.34×, mtscomp 1.41×, and even offline zstd-19 (1.44×) — at a fraction of
-the compute, proven bit-exact. Only offline LZMA (1.67×) is ahead, and it is not
-portable to the node.** FLAC actually *expands* Hyser (0.98×), so %-of-FLAC runs
-high; the honest bar on Hyser is the neuro/audio references (WavPack, mtscomp),
-all of which the embedded codec beats.
+**Embedded `LMS4+Rice+xchan_bestpartner` (1.480×) beats every embeddable-feasible
+reference — WavPack 1.34×, mtscomp 1.41×, and even offline zstd-19 (1.44×) — at a
+fraction of the compute (cost 0.039), proven bit-exact. Only offline LZMA (1.67×)
+is ahead, and it is not portable to the node.** FLAC actually *expands* Hyser
+(0.98×), so %-of-FLAC runs high; the honest bar on Hyser is the neuro/audio
+references (WavPack, mtscomp), all of which the embedded codec beats.
 
-- **Achieved cross-channel gain: +10.8%** (LMS 1.33× → 1.47×) — the dominant lever.
-- Max embeddable ratio 1.47× ≪ the 6× sanity ceiling → honest broadband EMG.
+- **Achieved cross-channel gain: +11.3%** (LMS 1.330× → 1.480×) — the dominant lever.
+- Max embeddable ratio 1.480× ≪ the 6× sanity ceiling → honest broadband EMG.
 
-### Real per-dataset summary (best embeddable = `LMS+Rice+xchan`)
+### Real per-dataset summary (best embeddable = `LMS4+Rice+xchan_bestpartner`, cost 0.039)
 
-| dataset | ch | best-emb ratio | %-of-FLAC | xchan gain | FLAC | best offline ref |
+| dataset | ch | best-emb ratio | %-of-FLAC | vs prior best (LMS+Rice+xchan) | FLAC | best offline ref |
 |---|--:|--:|--:|--:|--:|---|
-| **hyser_1dof_f1_s1** (primary) | 128 | **1.47×** | 151% | **+10.8%** | 0.98× | lzma 1.67× |
-| otb_hdsemg_vl | 64 | 2.14× | 175% | +17.4% | 1.23× | wavpack 1.85× (emb-class) |
-| cemhsey_s1_d1t1 | 320 | 1.96× | 167% | +13.1% | 1.17× | lzma 2.06× |
-| capgmyo_dba_s1 | 128 | 1.35× | 137% | +1.3% | 0.98× | wavpack 1.35× |
+| **hyser_1dof_f1_s1** (primary) | 128 | **1.480×** | 151% | +0.45% (1.474×) | 0.98× | lzma 1.67× |
+| otb_hdsemg_vl | 64 | **2.162×** | 176% | +0.90% (2.143×) | 1.23× | wavpack 1.85× (emb-class) |
+| cemhsey_s1_d1t1 | 320 | **1.956×** | 167% | +0.02% (1.955×) | 1.17× | lzma 2.06× |
+| capgmyo_dba_s1 | 128 | **1.350×** | 137% | +0.09% (1.349×) | 0.98× | wavpack 1.35× |
 
 - Cross-channel gain **tracks real spatial redundancy**, exactly as the mechanism
   predicts: strong on OTB/CEMHSEY/Hyser (neighbour |corr| 0.73–0.79), near-zero on
@@ -222,6 +226,39 @@ promoted** (none beats the current best on real data), **two retired**:
 - **Port recommendation unchanged.** Two open-frontier levers are now spent; the live frontier
   collapses onto variations of the adaptive rank-1 subtract (best-partner on order-4 first).
 
+## Cycle 2026-07-16 — order-4 best-partner (PROMOTED), multi-parent, cross-channel context Rice
+
+All four real sets reachable, benched at 15 000 samples (`results/cycle_bench.csv`); incumbent
+reproduces the headline (`LMS+Rice+xchan` Hyser 1.474×, OTB 2.143×). Three distinct candidates, **all
+double-verified PROMOTE (no splits)**; **one promoted (new best), two retired**:
+
+| candidate | mechanism / axis | real (Hyser / OTB / CEMHSEY / CapgMyo) | cost | verdict |
+|---|---|---|---:|---|
+| `LMS4+Rice+xchan_bestpartner` | order-4 predictor under best-partner front-end (temporal) | **1.480× / 2.162× / 1.956× / 1.350×** | **0.039** | **PROMOTED — new best on all 4** |
+| `LMS+Rice+xchan_multiparent` | two-parent (up+left) summed rank-1 subtract (spatial topology) | 1.398× / 1.971× / 1.872× / 1.347× | 0.078 | **RETIRED** — dominated on all 4 |
+| `LMS+Rice+xctx` | cross-channel context-adaptive Rice k (conditional entropy) | 1.293× / 1.783× / 1.682× / 1.297× | 0.095 | **RETIRED** — below even plain LMS+Rice on all 4 |
+
+- **`LMS4+Rice+xchan_bestpartner` (PROMOTED).** Same best-partner spatial front-end as cycle-2's
+  codec, predictor order 8→4 (P2). **Dominates on BOTH axes** the prior incumbent `LMS+Rice+xchan`
+  (higher ratio, cost 0.039 < 0.057) *and* the order-8 `LMS+Rice+xchan_bestpartner` (higher ratio,
+  0.039 < 0.063 → order-8 bestpartner now RETIRED) on all 4 real sets. Beats the current best on real
+  data AND unanimous PROMOTE → promotion rule satisfied. Achieved cross-channel gain vs temporal-only:
+  +18.4% OTB, +13.1% CEMHSEY, +11.3% Hyser, +1.37% CapgMyo (search-isolated cross on→off +14.83%).
+- **`LMS+Rice+xchan_multiparent` (RETIRED).** A second summed parent captured only **~half** the
+  single-parent gain (OTB +8.0% vs +17.4%) — the up/left parents are mutually correlated, so summing
+  two *marginal* β subtracts over-subtracts their shared mode (marginal-vs-multiple regression). Needs
+  a joint 2×2 solve — the already-dead multi-tap transform. Dominated on all 4 (worse ratio AND higher
+  cost 0.078 > 0.057). See `experiments/007_lms_rice_xchan_multiparent.md`.
+- **`LMS+Rice+xctx` (RETIRED).** Conditioning the Rice k on a cross-channel energy context lost
+  **2.3–2.8% vs a plain per-block adaptive k** on every real set — below even plain `LMS+Rice`. After
+  LMS whitening the residual is not cross-channel heteroscedastic (H(e_c|neighbour energy) ≈ H(e_c)),
+  and the 12-bucket context split's model cost dominates — extends P5. See
+  `experiments/008_lms_rice_xctx.md`.
+- **Sanity:** max real ratio 2.162× (OTB) ≪ 6× ceiling; every row bit-exact (`ok=True`), all
+  `embedded_ok`/`neural_ok`; incumbent unchanged (no regression). Only `research/registry.py` (retire
+  flags + the promoted registration was added its cycle), report files, and `SURVEY.md` touched;
+  `rtl/`/`sim/` untouched.
+
 ## Best embeddable after search (real Hyser)
 
 `research/search.py` on `hyser_1dof_f1_s1` (15 000 samples, `results/06_search_hyser.csv`):
@@ -279,14 +316,20 @@ by each set's real neighbour correlation, consistent with the sweep.
   signal; the embeddable form computes beta per block (look-ahead = one block).
   This is the first RTL/firmware implementation task (flagged in registry
   `meta.notes`).
-- **2026-07-10 update (OTB, the only real set reachable that session):** a new
-  candidate, `LMS+Rice+xchan_bestpartner` (best-of-4 causal-neighbour
-  selection), reached a non-dominated max-ratio corner (2.15× at cost 0.063 vs
-  the incumbent's 2.14×/0.057) — real but marginal (+0.40%), and it does
-  **not** change this port recommendation. The OTB-local search also refined
-  the single-parent port pick slightly to `lms4s7+x6/b512` (2.163×, cost
-  0.027); see the cycle section above for the full picture. Kept registered,
-  not promoted to headline.
+- **2026-07-16 update (all 4 real sets) — new PROMOTED best:**
+  `LMS4+Rice+xchan_bestpartner` (best-of-4 causal-neighbour selection on an
+  order-4 predictor) is now the **max-ratio best embeddable on every real set**
+  (Hyser 1.480×, OTB 2.162×, CEMHSEY 1.956×, CapgMyo 1.350×) at **cost 0.039** —
+  it Pareto-*dominates* both the prior incumbent `LMS+Rice+xchan` (0.057) and the
+  retired order-8 `LMS+Rice+xchan_bestpartner` (0.063) on both axes. **The
+  value/minimal-hardware port pick stays `lms4s8+x6/b512`** (single-parent
+  order-4, cost 0.027, **zero partner side-info**): it is essentially tied on
+  ratio (hyser+otb mean 1.8204 vs the promoted codec's 1.8212, +0.04%) without
+  the best-partner id+β side-info. Port the promoted codec only if that side-info
+  is acceptable for the marginal ratio; otherwise the single-parent order-4 is
+  the simpler, near-identical choice. The best-partner selection carries the same
+  offline whole-signal port caveat as before (embeddable form re-selects per
+  block).
 
 ## Status vs. the 6-stage plan
 

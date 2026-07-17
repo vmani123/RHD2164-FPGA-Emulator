@@ -55,6 +55,19 @@ is not. Every novel design faces the same bars: lossless + bit-exact, `embedded_
   320 channels), so a single global mean is a mismatched basis and the local-pairwise weight
   captures far more MI. Choose the spatial basis to match the *spatial scale* of the real
   redundancy — global mean for tight arrays, local pairwise for extended ones.
+- **Refinement (2026-07-16, `LMS+Rice+xchan_multiparent` — RETIRED).** Extending the spatial support
+  from one parent to two (up + left), each with its own backward-adaptive β, the two rank-1 subtracts
+  **summed**, captured only **~half** the single-parent gain on real data (otb +8.0% vs +17.4%, hyser
+  +5.1% vs +10.8%, cemhsey +8.3% vs +13.1%) and was Pareto-dominated on all 4 sets. **Adding a parent
+  HURT.** **Theory:** the two parents are themselves correlated (Cov(up,left) > 0). Each *marginal*
+  β_p = ⟨x_c,x_p⟩/⟨x_p,x_p⟩ is correct only when its parent is the sole regressor; summing two
+  independent marginal subtracts **double-counts the parents' shared common mode → over-subtracts**,
+  injecting more noise than the extra MI removed — the classic *marginal vs multiple* regression gap
+  under collinear predictors. **Implication:** richer spatial *topology* pays only via a **joint**
+  decorrelation (2×2 normal-equations solve accounting for parent–parent covariance) — which is exactly
+  the multi-tap rotation/lifting already a dead end (P3). A *sum of independent rank-1 subtracts* is not
+  a valid multi-parent extension. The single most-correlated parent (best-partner) remains the right
+  rank-1 lever.
 
 ### P2 — Temporal prediction saturates early; deeper prediction *hurts* on real data.
 - **Evidence:** order-4 LMS beats order-8 on both Hyser and OTB (order 4→8 *costs* ratio in
@@ -65,6 +78,16 @@ is not. Every novel design faces the same bars: lossless + bit-exact, `embedded_
   per-sample cost grow with order.
 - **Implication:** keep the temporal predictor **small** (order ≤4). Spend complexity on the
   spatial front-end and the entropy back-end, not on deeper temporal prediction.
+- **Refinement (2026-07-16, `LMS4+Rice+xchan_bestpartner` — PROMOTED, new best).** Dropping the
+  predictor order 8→4 *beneath the unchanged best-partner front-end* simultaneously **raised** the
+  ratio on all 4 real sets and **cut cost 0.063→0.039** (otb 2.162× vs 2.151×, hyser 1.480× vs 1.478×,
+  capgmyo 1.350× vs 1.349×, cemhsey 1.956× vs 1.955×) — a both-axes Pareto win that made the order-8
+  bestpartner dominated (RETIRED). Third independent real cycle where order-4 beats order-8 (search
+  ablation this cycle: order 4→8 *costs* +0.79% ratio). **P2 is now the reliable way to buy cost back
+  under any front-end:** right-size the predictor to order-4 first, then spend the freed budget on the
+  spatial lever. The compression *level* is still owned by the cross-channel front-end (+11–18% over
+  temporal-only); order-4 owns the cost and a small ratio bonus (order-8's extra taps fit residual
+  noise).
 
 ### P3 — For the spatial transform, *data-dependent* beats *data-independent*.
 - **Evidence:** the fixed 45° integer-KLT front-end (`LMS+Rice+iklt`, cycle 2026-07-13)
@@ -124,33 +147,51 @@ is not. Every novel design faces the same bars: lossless + bit-exact, `embedded_
   predictor + spatial front-end; to lower coded bits, lower the residual entropy upstream (better
   decorrelation), not the coder. (A back-end swap could still be justified purely for
   *throughput/hardware* reasons, never for ratio.)
+- **Extension (2026-07-16, `LMS+Rice+xctx` — RETIRED): even the Rice *parameter's context* is a dead
+  lever, not just the engine.** Conditioning the per-sample Rice k on a cross-channel context
+  (JPEG-LS/LOCO-I energy buckets driven by the neighbour's residual magnitude) — engine unchanged —
+  came in **2.3–2.8% BELOW a plain per-block adaptive k on every real set** at ~2× cost (below even
+  plain `LMS+Rice` with no cross-channel front-end at all). **Theory, two compounding failures:** (1)
+  after the LMS predictor whitens the residual, H(e_c | neighbour energy) ≈ H(e_c) — the across-channel
+  heteroscedasticity the context was meant to exploit is *already removed by the temporal predictor*,
+  not left in the residual; (2) splitting into 12 energy buckets fragments the per-context sample count,
+  so each k is noisier and average coded length *rises* (context-model cost with no conditional-entropy
+  payoff). **The residual's conditional entropy given a cross-channel context ≈ its unconditional
+  entropy on this data** — so *any* context-modeling of the Rice parameter (spatial or otherwise) is a
+  spent lever too, for the same reason the engine swap is: Rice already sits at the floor and there is
+  no sub-Golomb fraction to amortize the model cost.
 
 ---
 
 ## Open frontier (untried levers, ranked by expected payoff/cost)
 
-_Frontier #1 (entropy back-end) and #2 (data-dependent multi-tap transform) from the prior
-cycle were both SPENT this cycle with **negative** real-data results — moved to Dead ends
-(P5, P3). Every remaining live lever is a variation on the **adaptive rank-1 spatial subtract**,
-which every cycle keeps confirming as the mechanism that works._
+_This cycle spent the two remaining rank-1-variation levers: **#1 (best-partner on order-4) WON and
+was PROMOTED** as the new best; **#2 (multi-parent summed subtract) was SPENT NEGATIVE** — summing
+marginal subtracts over-subtracts correlated parents (moved to Dead ends, P1-refinement). The
+conditional-entropy lever (`xctx`) was also spent negative (P5-extension). The live frontier has
+narrowed sharply: the single most-correlated rank-1 subtract on an order-4 predictor is now the
+proven ceiling, and every "add more spatial taps" idea reduces to a **joint** decorrelation (a
+dead-end multi-tap transform) rather than a sum of rank-1 subtracts._
 
-1. **Best-partner selection rebuilt on the order-4 predictor** (P2 + P4). Cycle 2's best-partner
-   used order-8; on the search-proven cheaper order-4 (`lms4s7+x7/b512`, cycle_search.csv 2.321×
-   / 0.027) it might dominate the incumbent on *both* axes instead of only extending the ratio
-   ceiling at extra cost. **Now the highest-payoff live lever** — a cheaper, better predictor
-   under the proven front-end, no new mechanism risk.
-2. **Multi-parent backward-adaptive rank-1 subtract** (P1 + P3-refinement + P4). Extend the
-   single grid-parent to a *small* set of causal neighbours (e.g. up + left), each with its own
-   backward-adaptive integer beta, summed. Stays rank-per-parent (robust under estimation noise,
-   unlike the rotation that corrupts both channels) and zero side-info. Targets the residual
-   *local* spatial MI that one parent leaves — largest where neighbour |corr| is high
-   (OTB/CEMHSEY/Hyser). Gate hard on cost (each parent adds state + ops).
-3. **Scale-matched two-stage spatial front-end: global CAR *then* local pairwise** (P1-refinement).
-   ACAR and the single-neighbour subtract capture *different* MI slices (global common-mode vs
-   local pairwise); on tight arrays CAR wins, on large arrays pairwise wins. A backward-gated CAR
-   lift followed by the adaptive neighbour subtract on the CAR residual could capture *both*
-   slices where both exist. Risk: on large arrays CAR adds ~nothing (may not clear its gate) —
-   measure whether the two slices are additive or already redundant with each other.
+1. **Scale-matched two-stage spatial front-end: global CAR *then* local pairwise** (P1-refinement).
+   ACAR and the single-neighbour subtract capture *different, non-interchangeable* MI slices (global
+   common-mode vs local pairwise); on tight arrays CAR wins, on large arrays pairwise wins. A
+   backward-gated CAR lift followed by the adaptive best-partner subtract on the CAR residual could
+   capture *both* slices where both exist — and unlike multi-parent (#2, now dead) the two stages are
+   **orthogonal by construction** (global mean vs local pairwise), so they do not double-count the way
+   two correlated local parents did. **Now the highest-payoff live lever.** Build on the promoted
+   order-4 best-partner. Risk: on large arrays CAR adds ~nothing (may not clear its gate) — measure
+   whether the slices are additive or already redundant.
+2. **Joint (2×2) local decorrelation vs the summed marginal subtract** (P1-refinement + P3). The
+   multi-parent *sum* failed because it ignored parent–parent covariance; a genuine 2-parent gain would
+   require a joint normal-equations solve. But that is a data-dependent multi-tap rotation — already a
+   dead end (P3). **Low expected payoff / high risk**: only worth it if a cheap, robust integer 2×2
+   lifting can be found that does *not* corrupt both channels (the property that sank iklt_adaptive).
+   De-prioritized below #1.
+3. **Non-stationarity of the best-partner selection** (P4). The promoted codec derives partner id + β
+   offline over the whole signal (port caveat). A backward-adaptive partner *re-selection* per block
+   (decoder mirrors it → zero side-info) would close the port caveat; measure whether per-block
+   re-selection holds the offline ratio. This is an *embeddability/port* lever, not a ratio play.
 
 ## Dead ends (retired — do NOT re-propose as new; a genuinely different variant must say why)
 
@@ -168,6 +209,17 @@ which every cycle keeps confirming as the mechanism that works._
   any entropy-coder swap as a *ratio* play.
 - **Per-block single-neighbour adaptive beta alone** (`LMS+Rice+xchan_adaptive`): dominated by the
   incumbent on real OTB (worse ratio AND higher cost); kept only for the zero-side-info port story.
+- **Multi-parent summed rank-1 subtract** (`LMS+Rice+xchan_multiparent`, retired 2026-07-16): two
+  causal parents (up + left), each its own backward-adaptive β, subtracts summed. Captured only ~half
+  the single-parent gain and dominated on all 4 real sets. Summing *marginal* subtracts double-counts
+  the correlated parents' shared mode → over-subtracts (P1-refinement, marginal-vs-multiple regression).
+  Extending spatial support needs a **joint** solve, not a sum of rank-1 subtracts — and a joint solve
+  is the already-dead multi-tap transform. Do not re-propose a summed multi-parent subtract.
+- **Cross-channel context-adaptive Rice parameter** (`LMS+Rice+xctx`, retired 2026-07-16): conditioning
+  the Rice k on a JPEG-LS-style cross-channel energy context (engine unchanged) came in 2.3–2.8% *below*
+  a plain per-block adaptive k — below even plain LMS+Rice with no front-end — at ~2× cost. After LMS,
+  H(e_c | neighbour energy) ≈ H(e_c) and context-splitting's model cost dominates (P5-extension). Do not
+  re-propose *any* context-modeling of the Rice parameter as a ratio play, spatial or otherwise.
 - **[Kept, NOT retired — non-dominated corner] Global common-mode CAR** (`LMS+Rice+acar`): a
   low-cost Pareto point on tight arrays (OTB +14.4%, 2.089×/0.0559 — cheaper than the incumbent)
   but not on large arrays where redundancy is local (P1-refinement). Registered, not the best,

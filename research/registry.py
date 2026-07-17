@@ -1097,6 +1097,376 @@ def acar_decode(buf):
 
 
 # ===========================================================================
+# NEW candidate: Order-4 LMS under the best-partner cross-channel front-end.
+# ---------------------------------------------------------------------------
+# This pairs two levers that were each proven separately but never together:
+#   * the SPATIAL lever -- the already-shipped, non-dominated best-partner
+#     front-end (`_bp_select`/`_bp_inverse`): each channel picks its best-of-4
+#     causal grid neighbour + integer gain, tiny (parent,beta) side-info -- is
+#     reused VERBATIM (identical selection, identical side-info, identical
+#     inverse), so the spatial basis is unchanged.
+#   * the TEMPORAL lever -- INSIGHTS P2 MEASURED on real Hyser/OTB that an
+#     order-4 sign-sign LMS beats the order-8 one (deeper prediction fits noise
+#     and RAISES coded entropy) at ~half the state/ops. Cycle-2's best-partner
+#     was built on the over-provisioned order-8 predictor; here we simply
+#     right-size it to order-4.
+# So this codec is `LMS+Rice+xchan_bestpartner` with ec.lms_forward/inverse
+# called at order=4 instead of the family default (8). No new mechanism, no new
+# side-info: the encoder and decoder both run the SAME order-4 sign-sign LMS
+# (backward-adaptive, zero side-info -- INSIGHTS P4) so they stay a matched pair.
+# The intent (INSIGHTS open-frontier #1) is to dominate the incumbent on BOTH
+# axes -- strictly cheaper (half the temporal state/ops) AND >= ratio.
+# ===========================================================================
+LMS4BP_MAGIC = 0x4C34   # 'L4'
+LMS4_ORDER = 4          # right-sized temporal predictor (INSIGHTS P2), vs family's 8
+
+
+def lms4bp_encode(x, cols=16):
+    x = np.asarray(x, np.int64)
+    C, N = x.shape
+    xt, parents, betas = _bp_select(x, cols)          # best-partner front-end (verbatim)
+    res = ec.lms_forward(xt, order=LMS4_ORDER)        # order-4 sign-sign LMS (P2)
+    body = b"".join(ec.rice_encode_1d(res[c]) for c in range(C))
+    hdr = struct.pack("<HHII", LMS4BP_MAGIC, cols, C, N)
+    side = parents.astype("<i2").tobytes() + betas.astype("<i2").tobytes()
+    return hdr + side + body
+
+
+def lms4bp_decode(buf):
+    magic, cols, C, N = struct.unpack_from("<HHII", buf, 0)
+    assert magic == LMS4BP_MAGIC, "bad lms4bp codec magic"
+    off = 12
+    parents = np.frombuffer(buf, "<i2", C, off).astype(np.int64); off += 2 * C
+    betas = np.frombuffer(buf, "<i2", C, off).astype(np.int64); off += 2 * C
+    res = np.empty((C, N), np.int64)
+    for c in range(C):
+        arr, off = ec.rice_decode_1d(buf, off)
+        res[c] = arr
+    xt = ec.lms_inverse(res, order=LMS4_ORDER)        # matched order-4 inverse
+    x = _bp_inverse(xt, parents, betas)
+    return x.astype(np.int16)
+
+
+# ===========================================================================
+# NEW candidate: Multi-parent backward-adaptive rank-1 subtract
+# (LMS+Rice+xchan_multiparent).
+# ---------------------------------------------------------------------------
+# Every shipped cross-channel front-end that works here is the SAME rank-1
+# lever: subtract ONE causal grid neighbour with a gain (+xchan whole-signal
+# beta; xadapt/bestpartner variants). INSIGHTS P1-refinement measured that on
+# EXTENDED arrays the shared content is spatially LOCAL, so a single neighbour
+# leaves a further slice of local cross-channel mutual information uncaptured;
+# INSIGHTS open-frontier #2 endorses adding a SECOND causal parent to reach it.
+#
+# Mechanism: replace the single grid-parent with TWO causal parents -- UP
+# (g-cols) and LEFT (g-1), both grid index < g so decode still reconstructs in
+# channel order -- each with its OWN backward-adaptive integer beta, and SUM
+# their residual subtractions:
+#     y[c,t] = x[c,t] - ((beta_up[c]*x[up,t]) >> s) - ((beta_left[c]*x[left,t]) >> s)
+# This is a rank-2 LOCAL decorrelation realized as TWO independent asymmetric
+# rank-1 subtracts (one per parent), NOT a joint 2x2 solve: each beta is the
+# per-parent integer least-squares ratio <x_c,x_p>/<x_p,x_p> estimated
+# independently from the PREVIOUS block's already-reconstructed RAW samples
+# (block 0 -> beta=0). Both terms subtract the CLEAN raw parent and inject
+# estimation noise only into the residual channel c -- the parent rows stay
+# untouched -- which is exactly the robustness property INSIGHTS P3-refinement
+# credits the rank-1 subtract with, and which the RETIRED energy-preserving
+# rotation (iklt_adaptive, corrupts BOTH channels) lacks.
+#
+# Because both betas are recomputed by the decoder from bit-identical
+# reconstructed history, NO beta is transmitted (zero side-info, backward-
+# adaptive -- INSIGHTS P4), look-ahead 0. DISTINCT from the retired single-
+# parent scalar xchan_adaptive: it adds a SECOND independent parent on a
+# different topology (up vs left), the follow-up open-frontier #2 endorses --
+# not a re-run of the dominated single-parent scalar. Behind the front-end: the
+# SAME order-8 sign-sign LMS + adaptive Rice back-end as the whole family.
+# Basis: MPEG-4 ALS multichannel / Choi et al. 2014 (paper-reported, unverified
+# here). Gated hard on cost (each parent adds state + ops); neural budget
+# verified.
+# ===========================================================================
+MP_MAGIC = 0x584D            # 'XM' (xchan multi-parent)
+MP_BLOCK = ec.BLOCK          # backward-adaptation block (aligns with the Rice block)
+MP_SHIFT = ec.CROSS_SHIFT    # fixed-point gain scale (matches the +xchan family)
+
+
+def _mp_parents(C, cols):
+    """Two causal grid parents per channel: (up, left). up = g-cols (row > 0),
+    left = g-1 (col > 0); -1 where absent. Both indices < g so the decoder
+    reconstructs in channel order and a channel with neither parent (grid
+    origin) is coded as-is. Deterministic from (C, cols): identical on encode
+    and decode."""
+    up = np.full(C, -1, np.int64)
+    left = np.full(C, -1, np.int64)
+    for g in range(C):
+        r, c = divmod(g, cols)
+        if r > 0:
+            up[g] = g - cols
+        if c > 0:
+            left[g] = g - 1
+    return up, left
+
+
+def _mp_forward(x, up, left, B=MP_BLOCK, shift=MP_SHIFT):
+    """Two-parent cross-channel decorrelation with per-parent backward-adaptive
+    gain. For each parent independently, beta[block i] is the integer
+    least-squares ratio over the PREVIOUS block's raw samples (block 0 -> 0),
+    and its rank-1 subtract of the CLEAN raw parent is SUMMED into the residual.
+    Operates on the RAW signal (which the decoder rebuilds bit-exactly), so the
+    betas match on both sides."""
+    x = x.astype(np.int64)
+    C, N = x.shape
+    y = x.copy()
+    nblocks = (N + B - 1) // B
+    for c in range(C):
+        pu, pl = int(up[c]), int(left[c])
+        if pu < 0 and pl < 0:              # grid origin: no parent to subtract
+            continue
+        bu = bl = 0                        # block-0 bootstrap (coded as xchan-off)
+        for i in range(nblocks):
+            s, e = i * B, min((i + 1) * B, N)
+            if i > 0:
+                ps, pe = (i - 1) * B, i * B
+                if pu >= 0:
+                    bu = _beta_from_block(x[c, ps:pe], x[pu, ps:pe], shift)
+                if pl >= 0:
+                    bl = _beta_from_block(x[c, ps:pe], x[pl, ps:pe], shift)
+            r = x[c, s:e].copy()
+            if pu >= 0:
+                r = r - ((bu * x[pu, s:e]) >> shift)   # rank-1 subtract, parent 1
+            if pl >= 0:
+                r = r - ((bl * x[pl, s:e]) >> shift)   # rank-1 subtract, parent 2
+            y[c, s:e] = r
+    return y
+
+
+def _mp_inverse(y, up, left, B=MP_BLOCK, shift=MP_SHIFT):
+    """Invert _mp_forward. Both parents have index < c so their rows are fully
+    reconstructed before channel c; within a channel, block i's per-parent betas
+    are recomputed from the already-reconstructed block i-1 -- mirroring the
+    encoder exactly, with the two subtracts added back in the same order."""
+    y = y.astype(np.int64)
+    C, N = y.shape
+    x = y.copy()
+    nblocks = (N + B - 1) // B
+    for c in range(C):
+        pu, pl = int(up[c]), int(left[c])
+        if pu < 0 and pl < 0:
+            continue
+        bu = bl = 0
+        for i in range(nblocks):
+            s, e = i * B, min((i + 1) * B, N)
+            if i > 0:
+                ps, pe = (i - 1) * B, i * B
+                if pu >= 0:
+                    bu = _beta_from_block(x[c, ps:pe], x[pu, ps:pe], shift)
+                if pl >= 0:
+                    bl = _beta_from_block(x[c, ps:pe], x[pl, ps:pe], shift)
+            r = y[c, s:e].copy()
+            if pu >= 0:
+                r = r + ((bu * x[pu, s:e]) >> shift)
+            if pl >= 0:
+                r = r + ((bl * x[pl, s:e]) >> shift)
+            x[c, s:e] = r
+    return x
+
+
+def mp_encode(x, cols=16):
+    x = np.asarray(x, np.int64)
+    C, N = x.shape
+    up, left = _mp_parents(C, cols)
+    y = _mp_forward(x, up, left)
+    res = ec.lms_forward(y)                # order-8 sign-sign LMS (same as family)
+    body = b"".join(ec.rice_encode_1d(res[c]) for c in range(C))
+    hdr = struct.pack("<HHII", MP_MAGIC, cols, C, N)   # NO beta side-info
+    return hdr + body
+
+
+def mp_decode(buf):
+    magic, cols, C, N = struct.unpack_from("<HHII", buf, 0)
+    assert magic == MP_MAGIC, "bad xchan_multiparent magic"
+    off = 12
+    res = np.empty((C, N), np.int64)
+    for c in range(C):
+        arr, off = ec.rice_decode_1d(buf, off)
+        res[c] = arr
+    y = ec.lms_inverse(res)
+    up, left = _mp_parents(C, cols)
+    x = _mp_inverse(y, up, left)
+    return x.astype(np.int16)
+
+
+# ===========================================================================
+# NEW candidate: Cross-channel context-adaptive Rice (LMS+Rice+xctx).
+# ---------------------------------------------------------------------------
+# Every cycle so far moved the cross-channel FRONT-END (removing correlated
+# MEANS: +xchan/xadapt/bestpartner subtract a neighbour, acar the array mean) or
+# swapped the entropy engine (retired xchan_tans, P5). This candidate is on a
+# DIFFERENT axis -- SECOND-ORDER / CONDITIONAL entropy -- untouched by any tried
+# codec, and it keeps the Golomb-Rice engine (P5: Rice is already at the floor
+# for the UNCONDITIONAL residual). It changes only how the Rice parameter k is
+# SELECTED: per-sample, from a backward SPATIAL context.
+#
+# Mechanism (JPEG-LS/LOCO-I context modeling with a cross-channel context):
+# every prior spatial front-end removes correlated first-order MEANS, but HD-EMG
+# bursts (motor-unit action potentials) are spatially COHERENT, so the residual
+# stays HETEROSCEDASTIC and its VARIANCE is correlated ACROSS channels even after
+# mean decorrelation. A single per-block k per channel cannot track that. Here:
+#   * The temporal residual is the SAME order-8 sign-sign LMS as the family
+#     (res = ec.lms_forward(x)); the coder engine stays Golomb-Rice.
+#   * For a channel c with causal grid parent p = grid_parents(c) (p < c, so the
+#     decoder has p's full residual before it reaches c), a leaky integrator of
+#     the NEIGHBOUR residual magnitude |res[p,t]| forms a running spatial-energy
+#     estimate; its bit-length buckets that energy (log-energy context).
+#   * Per context bucket we keep JPEG-LS statistics (A = sum of coded magnitudes,
+#     N = count) and pick k as the smallest with (N<<k) >= A -- the standard
+#     LOCO-I Golomb rule -- so k tracks the residual variance CONDITIONED on the
+#     neighbour's current energy: high-neighbour-energy samples (spatially
+#     coherent bursts) get a larger k, quiet samples a smaller one. This exploits
+#     H(e_c | neighbour energy) < H(e_c): a conditional-entropy reduction a
+#     per-block k structurally misses.
+#   * The bucket and the per-bucket (A,N) stats are updated identically on both
+#     sides from causally-available, bit-identical data, so ZERO side-info is
+#     transmitted (no per-block k, no context table) -- backward-adaptive, P4.
+#     Root channels (no parent) fall back to a single context (bucket 0), i.e.
+#     plain per-channel JPEG-LS adaptive k with no spatial conditioning.
+#
+# Distinct from the RETIRED xchan_tans (P5): the entropy ENGINE stays Rice
+# (already optimal for the unconditional residual); only its PARAMETER's context
+# gains cross-channel information. Distinct from the spatial front-ends: nothing
+# is subtracted across channels here -- the neighbour only CONDITIONS the coder.
+# Borderline->embeddable: a leaky-energy add/shift + a small k lookup per sample,
+# per-context (A,N) counters as state, RTL-trivial. Risk to MEASURE: if the
+# per-block k already tracks local variance well, the spatial context may add
+# little. Citations: JPEG-LS/LOCO-I (context-conditioned Golomb), US7580585B2
+# (backward-adaptive Rice), Giurcaneanu/Tabus 2001 (context-based Golomb on
+# audio) -- paper-reported, unverified here.
+# ===========================================================================
+XCTX_MAGIC = 0x5843     # 'XC'
+XCTX_NBUCKETS = 12      # spatial-energy context buckets (log neighbour energy)
+XCTX_DECAY = 2          # leaky-integrator decay for the neighbour-energy estimate
+XCTX_RESET = 64         # JPEG-LS-style halving reset keeps per-context (A,N) local
+XCTX_A_INIT = 4         # (A,N) seed -> initial k = 2 before any data
+XCTX_N_INIT = 1
+
+
+def _xctx_k(A, N):
+    """LOCO-I/JPEG-LS Golomb parameter for context stats (A = accumulated coded
+    magnitudes, N = count): the smallest k with (N << k) >= A. Integer-only and
+    deterministic, so encode and decode derive the identical k from the identical
+    (backward-updated) stats."""
+    k = 0
+    while (N << k) < A:
+        k += 1
+    return k
+
+
+def _xctx_encode_channel(res, neigh):
+    """Per-sample context-adaptive Rice encode of one residual channel. The
+    context bucket is the bit-length of a leaky neighbour-energy integrator (a
+    single bucket 0 when the channel has no parent); per-bucket JPEG-LS (A,N)
+    stats pick the Rice k. Returns a length-prefixed packed-bit body. NO k or
+    context is transmitted -- the decoder recomputes bucket + stats identically
+    from the already-reconstructed neighbour residual."""
+    u = ec.zigzag(np.asarray(res, np.int64))          # >= 0 mapped residual
+    nmag = np.abs(np.asarray(neigh, np.int64)) if neigh is not None else None
+    A = [XCTX_A_INIT] * XCTX_NBUCKETS
+    Nc = [XCTX_N_INIT] * XCTX_NBUCKETS
+    nrg = 0
+    bits = []
+    for t in range(u.size):
+        if nmag is not None:
+            nrg = nrg + int(nmag[t]) - (nrg >> XCTX_DECAY)   # leaky spatial energy
+            b = nrg.bit_length()
+            if b >= XCTX_NBUCKETS:
+                b = XCTX_NBUCKETS - 1
+        else:
+            b = 0
+        k = _xctx_k(A[b], Nc[b])
+        ut = int(u[t])
+        q = ut >> k
+        bits.extend([0] * q)                          # unary quotient
+        bits.append(1)                                # stop bit
+        for j in range(k - 1, -1, -1):                # k remainder bits, MSB first
+            bits.append((ut >> j) & 1)
+        A[b] += ut
+        Nc[b] += 1
+        if Nc[b] >= XCTX_RESET:                       # halving reset -> local adapt
+            A[b] >>= 1
+            Nc[b] >>= 1
+    packed = np.packbits(np.array(bits, np.uint8)).tobytes() if bits else b""
+    return struct.pack("<I", len(packed)) + packed
+
+
+def _xctx_decode_channel(buf, off, N, neigh):
+    """Invert _xctx_encode_channel. Mirrors the encoder's bucket + per-context
+    (A,N) update from the already-reconstructed neighbour residual, so it derives
+    the identical per-sample k with no transmitted parameters."""
+    (nbytes,) = struct.unpack_from("<I", buf, off); off += 4
+    bits = (np.unpackbits(np.frombuffer(buf, np.uint8, nbytes, off))
+            if nbytes else np.zeros(0, np.uint8))
+    off += nbytes
+    nmag = np.abs(np.asarray(neigh, np.int64)) if neigh is not None else None
+    A = [XCTX_A_INIT] * XCTX_NBUCKETS
+    Nc = [XCTX_N_INIT] * XCTX_NBUCKETS
+    nrg = 0
+    u = np.empty(N, np.int64)
+    pos = 0
+    for t in range(N):
+        if nmag is not None:
+            nrg = nrg + int(nmag[t]) - (nrg >> XCTX_DECAY)
+            b = nrg.bit_length()
+            if b >= XCTX_NBUCKETS:
+                b = XCTX_NBUCKETS - 1
+        else:
+            b = 0
+        k = _xctx_k(A[b], Nc[b])
+        q = 0
+        while bits[pos] == 0:                          # count unary zeros
+            q += 1; pos += 1
+        pos += 1                                        # skip stop bit
+        r = 0
+        for _ in range(k):                              # k remainder bits, MSB first
+            r = (r << 1) | int(bits[pos]); pos += 1
+        ut = (q << k) | r
+        u[t] = ut
+        A[b] += ut
+        Nc[b] += 1
+        if Nc[b] >= XCTX_RESET:
+            A[b] >>= 1
+            Nc[b] >>= 1
+    return ec.unzigzag(u.astype(np.uint64)), off
+
+
+def xctx_encode(x, cols=16):
+    x = np.asarray(x, np.int64)
+    C, N = x.shape
+    res = ec.lms_forward(x)                 # order-8 sign-sign LMS (same as family)
+    parent = ec.grid_parents(C, cols)
+    body = []
+    for c in range(C):
+        p = int(parent[c])
+        neigh = res[p] if p >= 0 else None
+        body.append(_xctx_encode_channel(res[c], neigh))
+    hdr = struct.pack("<HHII", XCTX_MAGIC, cols, C, N)   # NO side-info
+    return hdr + b"".join(body)
+
+
+def xctx_decode(buf):
+    magic, cols, C, N = struct.unpack_from("<HHII", buf, 0)
+    assert magic == XCTX_MAGIC, "bad xctx magic"
+    off = 12
+    parent = ec.grid_parents(C, cols)
+    res = np.empty((C, N), np.int64)
+    for c in range(C):
+        p = int(parent[c])
+        neigh = res[p] if p >= 0 else None    # p < c so already reconstructed
+        arr, off = _xctx_decode_channel(buf, off, N, neigh)
+        res[c] = arr
+    x = ec.lms_inverse(res)
+    return x.astype(np.int16)
+
+
+# ===========================================================================
 # Uniform codec objects + the registry
 # ===========================================================================
 class Codec:
@@ -1266,7 +1636,15 @@ _register(Codec("LMS+Rice+xchan_bestpartner", bestpartner_encode, bestpartner_de
         state_bytes_per_ch=_LMS_STATE + _BP_STATE, causal=True,
         lookahead_samples=ec.BLOCK, block_size=ec.BLOCK, notes=_BP_NOTE),
     family="cross-channel",
-    desc="LMS + best-of-4 causal-neighbour cross-channel selection + Rice"))
+    desc="LMS + best-of-4 causal-neighbour cross-channel selection + Rice",
+    retired=True,
+    retired_reason="Conclusively Pareto-dominated by its order-4 sibling "
+                   "LMS4+Rice+xchan_bestpartner (promoted 2026-07-16): identical "
+                   "best-partner front-end, predictor order 8->4 gives higher ratio at "
+                   "LOWER cost (0.039 vs 0.063) on ALL 4 real sets (otb 2.162x vs 2.151x, "
+                   "hyser 1.480x vs 1.478x, capgmyo 1.350x vs 1.349x, cemhsey 1.956x vs "
+                   "1.955x) -- P2 (order-8 over-provisioned, deeper prediction fits noise). "
+                   "experiments/006_lms4_rice_xchan_bestpartner.md, cycle 2026-07-16."))
 
 # NEW candidate: fixed reversible integer-KLT (lifting) inter-channel transform
 # (this cycle). Multi-tap spatial front-end; zero temporal look-ahead; no
@@ -1426,6 +1804,141 @@ _register(Codec("LMS+Rice+acar", acar_encode, acar_decode, CodecMeta(
     block_size=ACAR_BLOCK, notes=_ACAR_NOTE), family="cross-channel",
     desc="adaptive common-average reference (reversible-integer lift, backward-"
          "gated) + LMS + Rice"))
+
+# NEW candidate (this cycle): Order-4 LMS under the best-partner front-end
+# (INSIGHTS open-frontier #1). Identical to LMS+Rice+xchan_bestpartner but with
+# the temporal predictor right-sized order-8 -> order-4 (INSIGHTS P2). Op/state
+# accounting mirrors bestpartner with the LMS half-sized: order-4 sign-sign LMS
+# is ~4 mac + 1 shift + 4-tap sign update(~8) + hist shift(4) + rice(~9) ~ 26 ops
+# and 4 weights + 4 history = 8xint16 = 16 B + rice bookkeeping ~ 24 B state (vs
+# the order-8 _LMS_OPS=50 / _LMS_STATE=40). Encoder adds the +xchan per-sample
+# work and the best-partner neighbour scan (~8 ops); the decoder is search-free
+# (reads the chosen parent+beta side-info), so dec_ops omits the scan.
+_LMS4_OPS = 26
+_LMS4_STATE = 24
+_LMS4BP_NOTE = (
+    "best-partner cross-channel front-end (per-channel best-of-4 causal grid "
+    "neighbour + integer gain, 2xint16/ch side-info -- reused verbatim from "
+    "LMS+Rice+xchan_bestpartner) with the temporal predictor right-sized from "
+    "the family's order-8 to order-4 sign-sign LMS (INSIGHTS P2: order-4 beats "
+    "order-8 on real Hyser/OTB -- deeper prediction fits noise and raises coded "
+    "entropy -- at ~half the state/ops). Same backward-adaptive LMS on both "
+    "sides (zero temporal side-info, INSIGHTS P4); only the predictor order "
+    "differs from bestpartner. Selection derived offline over the whole signal "
+    "like the incumbent xchan/bestpartner beta; embeddable realization selects "
+    "per block (look-ahead=block). Decoder is search-free.")
+_register(Codec("LMS4+Rice+xchan_bestpartner", lms4bp_encode, lms4bp_decode,
+    CodecMeta(
+        integer_only=True, enc_ops=_LMS4_OPS + _XCHAN_OPS + _BP_SELECT_OPS,
+        dec_ops=_LMS4_OPS + _XCHAN_OPS,
+        state_bytes_per_ch=_LMS4_STATE + _BP_STATE, causal=True,
+        lookahead_samples=ec.BLOCK, block_size=ec.BLOCK, notes=_LMS4BP_NOTE),
+    family="cross-channel",
+    desc="order-4 LMS + best-of-4 causal-neighbour cross-channel selection + Rice"))
+
+# NEW candidate (this cycle): Multi-parent backward-adaptive rank-1 subtract
+# (INSIGHTS open-frontier #2). Extends the single grid-parent to TWO causal
+# parents (up + left), each with its OWN backward-adaptive integer beta, the two
+# rank-1 residual subtracts SUMMED. Over the incumbent +xchan per-sample work,
+# each parent contributes: the rank-1 subtract itself (1 mul + 1 shift + 1 sub ~
+# _XCHAN_OPS) PLUS a backward beta estimate (two running dot-products <x_c,x_p>,
+# <x_p,x_p> ~ 2 macs + an amortised block divide ~ _XADAPT_XTRA). Two parents ->
+# 2*(_XCHAN_OPS + _XADAPT_XTRA) extra ops over plain LMS. The decoder RECOMPUTES
+# both betas (nothing transmitted), so dec_ops == enc_ops. State adds, on top of
+# the order-8 LMS weights, two int16 betas (4 B) + two int64 covariance
+# accumulators per parent (2 parents x 2 x 8 = 32 B) = 36 B. Backward-adaptive
+# so look-ahead 0 and ZERO side-info (INSIGHTS P4).
+_MP_XTRA = 2 * (_XCHAN_OPS + _XADAPT_XTRA)   # two parents: subtract + backward beta each
+_MP_STATE = _LMS_STATE + 36                  # LMS + 2 betas + 2x2 int64 accumulators
+_MP_NOTE = (
+    "multi-parent backward-adaptive rank-1 cross-channel subtract: TWO causal "
+    "grid parents per channel -- up (g-cols) and left (g-1), both idx<g -- each "
+    "with its OWN backward-adaptive integer gain beta = <x_c,x_p>/<x_p,x_p> "
+    "(fixed-point) estimated from the PREVIOUS block's already-reconstructed RAW "
+    "samples (block 0 -> beta=0), the two rank-1 residual subtracts SUMMED: "
+    "y[c]=x[c]-((bu*x[up])>>s)-((bl*x[left])>>s). A rank-2 LOCAL decorrelation as "
+    "TWO independent asymmetric rank-1 subtracts (not a joint 2x2 solve); each "
+    "subtracts the CLEAN raw parent and injects estimation noise only into "
+    "residual channel c, leaving both parent rows untouched -- the robustness "
+    "property INSIGHTS P3-refinement credits the rank-1 subtract with (unlike the "
+    "retired energy-preserving iklt_adaptive rotation that corrupts both "
+    "channels). Both betas recomputed by the decoder from bit-identical "
+    "reconstructed history -> zero side-info, look-ahead 0, backward-adaptive "
+    "(INSIGHTS P4). Targets the residual LOCAL spatial MI one parent leaves on "
+    "extended high-|corr| arrays (INSIGHTS P1-refinement, open-frontier #2); "
+    "distinct from the retired single-parent scalar xchan_adaptive by adding a "
+    "second independent parent on a different topology. Then the unchanged "
+    "order-8 sign-sign LMS + adaptive Rice back-end. Basis: MPEG-4 ALS "
+    "multichannel / Choi et al. 2014 (paper-reported, unverified here).")
+_register(Codec("LMS+Rice+xchan_multiparent", mp_encode, mp_decode, CodecMeta(
+    integer_only=True, enc_ops=_LMS_OPS + _MP_XTRA, dec_ops=_LMS_OPS + _MP_XTRA,
+    state_bytes_per_ch=_MP_STATE, causal=True, lookahead_samples=0,
+    block_size=MP_BLOCK, notes=_MP_NOTE), family="cross-channel",
+    desc="LMS + two-parent (up+left) backward-adaptive rank-1 cross-channel "
+         "decorrelation + Rice",
+    retired=True,
+    retired_reason="Conclusively Pareto-dominated by LMS+Rice+xchan on ALL 4 real "
+                   "sets (worse ratio AND higher cost 0.078 vs 0.057: otb 1.971x vs "
+                   "2.143x, hyser 1.398x vs 1.474x, capgmyo 1.347x vs 1.349x, cemhsey "
+                   "1.872x vs 1.955x). Summing two INDEPENDENT marginal rank-1 subtracts "
+                   "over-subtracts the up/left parents' shared common mode (Cov(up,left)>0 "
+                   "ignored) -- captures only ~half the single-parent xchan gain. "
+                   "experiments/007_lms_rice_xchan_multiparent.md, cycle 2026-07-16."))
+
+# NEW candidate (this cycle): Cross-channel context-adaptive Rice (SECOND-ORDER /
+# CONDITIONAL entropy axis, untouched by any tried codec). Keeps the order-8
+# sign-sign LMS residual and the Golomb-Rice ENGINE, but selects the per-sample
+# Rice k from a backward SPATIAL context (JPEG-LS/LOCO-I context modeling). Over
+# the plain LMS+Rice per-sample work, the xctx back-end adds, per sample-ch: a
+# leaky neighbour-energy update (1 add + 1 shift + 1 sub ~3), a bit-length bucket
+# (~1), the LOCO-I k lookup (a short while-loop, amortised ~2), and the
+# per-context (A,N) accumulate + occasional halving (~1) -> ~+8 ops over Rice.
+# Decode mirrors the identical bucket + stats update (also no per-symbol divide),
+# so dec_ops == enc_ops. Persistent state adds, on top of the order-8 LMS
+# weights, XCTX_NBUCKETS per-context stat pairs (A int32 + N int16 ~ 6 B each ->
+# ~72 B) + the leaky-energy accumulator (~4 B). Backward-adaptive: ZERO side-info
+# (no k, no context table transmitted), look-ahead 0 -- the decoder recomputes
+# every k from the already-reconstructed neighbour residual.
+_XCTX_XTRA = 8
+_XCTX_STATE = _LMS_STATE + XCTX_NBUCKETS * 6 + 4   # LMS + per-context (A,N) + nrg
+_XCTX_NOTE = (
+    "cross-channel context-adaptive Golomb-Rice: same order-8 sign-sign LMS "
+    "residual and the SAME Rice engine as the family (P5 -- Rice is at the floor "
+    "for the unconditional residual), but the per-sample Rice k is selected from "
+    "a backward SPATIAL context (JPEG-LS/LOCO-I context modeling on a "
+    "cross-channel context). For channel c with causal grid parent p (p<c, so "
+    "the decoder has p's full residual first), a leaky integrator of |res[p,t]| "
+    "estimates the neighbour spatial energy; its bit-length buckets that energy "
+    "(XCTX_NBUCKETS log-energy buckets). Per bucket, JPEG-LS stats (A=sum coded "
+    "magnitudes, N=count, halving-reset at 64) pick k = smallest with (N<<k)>=A, "
+    "so k tracks the residual variance CONDITIONED on the neighbour's current "
+    "energy -- exploiting H(e_c|neighbour energy) < H(e_c), the across-channel "
+    "HETEROSCEDASTICITY a single per-block k misses (spatially coherent MUAP "
+    "bursts stay variance-correlated across channels even after mean "
+    "decorrelation). Bucket + (A,N) updated identically on both sides from "
+    "bit-identical causal data -> ZERO side-info (no per-block k, no context "
+    "table), backward-adaptive (P4), look-ahead 0. Root channels (no parent) "
+    "fall back to a single context = plain per-channel JPEG-LS adaptive k. "
+    "Distinct from the RETIRED xchan_tans (P5): the entropy ENGINE stays Rice; "
+    "only its PARAMETER's context gains cross-channel information. Nothing is "
+    "subtracted across channels -- the neighbour only CONDITIONS the coder. "
+    "Basis: JPEG-LS/LOCO-I context-conditioned Golomb, US7580585B2 "
+    "(backward-adaptive Rice), Giurcaneanu/Tabus 2001 -- unverified here.")
+_register(Codec("LMS+Rice+xctx", xctx_encode, xctx_decode, CodecMeta(
+    integer_only=True, enc_ops=_LMS_OPS + _XCTX_XTRA, dec_ops=_LMS_OPS + _XCTX_XTRA,
+    state_bytes_per_ch=_XCTX_STATE, causal=True, lookahead_samples=0,
+    block_size=ec.BLOCK, notes=_XCTX_NOTE), family="entropy-backend",
+    desc="LMS + cross-channel context-adaptive Rice k (JPEG-LS-style spatial "
+         "context, zero side-info)",
+    retired=True,
+    retired_reason="Conclusively Pareto-dominated even by plain LMS+Rice (no xchan) on "
+                   "ALL 4 real sets (worse ratio AND far higher cost 0.095 vs 0.052: otb "
+                   "1.783x vs 1.825x, hyser 1.293x vs 1.330x, capgmyo 1.297x vs 1.332x, "
+                   "cemhsey 1.682x vs 1.729x). After LMS whitening the residual is not "
+                   "cross-channel heteroscedastic enough: H(e_c|neighbour energy) ~= "
+                   "H(e_c), so the 12-bucket context split's model cost dominates any "
+                   "conditional-entropy gain -- confirms/extends P5. "
+                   "experiments/008_lms_rice_xctx.md, cycle 2026-07-16."))
 
 
 def list_codecs(include_retired=False):

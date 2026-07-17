@@ -7,7 +7,7 @@ spatial correlation). **This file PROPOSES only** — no measured ratios, no cod
 edits (non-negotiable #4). Watch-list methods are never promoted without explicit
 human approval. Seeds `compression_spec/candidates.md`.
 
-_Compiled: 2026-07-06 · refreshed 2026-07-10 · refreshed 2026-07-13 (cycle 2026-07-13) · refreshed 2026-07-14 (cycle 4, SURVEY-only) · web search (US) + candidates.md + INSIGHTS.md._
+_Compiled: 2026-07-06 · refreshed 2026-07-10 · refreshed 2026-07-13 (cycle 2026-07-13) · refreshed 2026-07-14 (cycle 4, SURVEY-only) · refreshed 2026-07-16 (cycle 7 survey, SURVEY-only) · web search (US) + candidates.md + INSIGHTS.md._
 
 _Cycle log (what's already been tried, so don't re-recommend it):_
 - _`LMS+Rice+xchan` (order-8, whole-signal float beta) is the incumbent real best (OTB 2.14×, cost 0.057; Hyser 1.47×)._
@@ -25,6 +25,16 @@ _Cycle log (what's already been tried, so don't re-recommend it):_
   - _**(1, highest payoff/cost) Best-partner rebuilt on the order-4 predictor.** Knob: predictor order 8→4 under the shipped `LMS+Rice+xchan_bestpartner` front-end (`lms4s7+x7/b512`, cycle_search.csv 2.321×/0.027 — order-4 beats order-8 at ~half cost, P2). Cheaper AND better predictor under the one mechanism that works; could dominate the incumbent on BOTH axes with no new mechanism risk. Carry-over from cycle 2, now the top live lever._
   - _**(2) Multi-parent backward-adaptive rank-1 subtract.** Knob: single grid-parent → a small set of causal neighbours (up + left), each its own backward-adaptive integer beta, summed. Stays rank-per-parent (robust under estimation noise — unlike the rotation that corrupts both channels) and zero side-info; targets the residual *local* spatial MI one parent leaves, largest where neighbour |corr| is high (OTB/CEMHSEY/Hyser). Gate hard on per-parent cost._
   - _**(3) Scale-matched two-stage front-end: global CAR then local pairwise.** Knob: backward-gated ACAR lift followed by the adaptive neighbour subtract on the CAR residual — capture the *two different* MI slices (global common-mode + local pairwise) where both exist. Highest ceiling, but measure whether the slices are additive or already redundant; on large arrays CAR may add ~nothing (won't clear its gate)._
+- _**Cycle 7 survey (2026-07-16, SURVEY-only).** Checked the retired ledger (`registry.py --selftest`): RETIRED = `xchan_adaptive` (scalar single-parent beta alone), `iklt` (fixed 45° integer-KLT), `iklt_adaptive` (backward-adaptive rotation), `xchan_tans` (entropy back-end swap); DONE/non-dominated = `bestpartner`, `acar`. Both prior open-frontier levers (multi-tap spatial transform, entropy back-end) are SPENT with negative real-data results — every live lever is now a variation on the adaptive rank-1 subtract, or a lever on an axis nobody has touched. This cycle's slate spans **three genuinely distinct mechanisms/axes**: (1) a **better temporal predictor** under the proven pairwise front-end, (2) a **richer spatial topology** (multi-parent rank-k subtract), and (3) a **NOVEL second-order (variance) cross-channel lever** — context-adaptive Rice parameter driven by neighbour residual energy — an axis no tried codec touches. All three are integer, causal, backward-adaptive (zero side-info). None re-proposes a retired mechanism (distinctions stated per candidate below)._
+  - _**(1, highest payoff/cost) Order-4 LMS under best-partner** (`lms4bp`, a.k.a. `LMS4+Rice+xchan_bestpartner`). Axis: **temporal predictor**. Knob: drop the predictor order 8→4 (P2: order-4 beats order-8 at ~half state/ops — `lms4s7+x*/b512` in cycle_search.csv sits at 2.321×/0.027) beneath the already-shipped, non-dominated best-partner spatial front-end. Why the data says so: cycle-2 best-partner used the over-provisioned order-8; on the search-proven cheaper order-4 it could dominate the incumbent on BOTH axes (lower cost AND ≥ ratio), with **no new mechanism risk** — the winning spatial lever is unchanged, only the temporal front-end is right-sized. Distinct from candidates (2)/(3): it moves the temporal axis, they move spatial-topology / entropy-context. Not a retired idea (best-partner is DONE/non-dominated, not retired; this pairs it with a cheaper predictor). INSIGHTS open-frontier #1._
+  - _**(2) Multi-parent backward-adaptive rank-1 subtract** (`LMS+Rice+xchan_multiparent`). Axis: **spatial topology**. Knob: replace the single grid-parent with a small causal set (up + left), **each** with its own backward-adaptive integer beta, residuals summed — a rank-2 *local* decorrelation, still one rank-1 asymmetric subtract per parent (residual-only injection, parent left clean → robust under causal estimation noise, unlike the retired energy-preserving rotation that corrupts both channels, P3-refinement). Zero side-info. Why: one parent leaves residual *local* spatial MI on high-|corr| arrays (OTB/CEMHSEY/Hyser); a second causal neighbour captures a further, largely-orthogonal slice (P1). **Distinct from the RETIRED `xchan_adaptive`** (that was a *single*-parent scalar beta, dominated) — this is a genuinely different *topology* (a second independent parent + summed rank-2 subtract), the named follow-up P1/INSIGHTS #2 endorses, not a re-run. Gate hard per-parent on cost. INSIGHTS open-frontier #2._
+  - _**(3, NOVEL) Cross-channel context-adaptive Rice** (`LMS+Rice+xctx`). Axis: **second-order / conditional entropy** — untouched by any tried codec. Knob: keep the adaptive Golomb-Rice coder, but **select the per-sample Rice parameter k for channel c from a backward context formed by the recently-decoded neighbour residual magnitudes** (a spatial-energy bucket → k table; decoder mirrors it → zero side-info). Why (information-theoretic): every prior spatial lever removes correlated **means** (first-order). HD-EMG activity is bursty and **spatially coherent** — a motor-unit action potential raises residual *variance* across a whole electrode region at once — so the residual is **heteroscedastic and cross-channel variance-correlated even after mean decorrelation**. A single per-block k per channel cannot track that; conditioning k on neighbour energy exploits H(e_c | neighbour energy) < H(e_c), lowering **conditional** coded entropy. **This is NOT the retired entropy-coder swap** (`xchan_tans`, P5): the coder engine stays Rice — only its parameter's *context* is enriched with cross-channel information. P5's "Rice is at the entropy floor" concerns the *unconditional per-block* residual; candidate (3) attacks the across-channel heteroscedasticity a per-block k structurally misses. This is the JPEG-LS/CALIC context-modeling principle (condition the Golomb parameter on a causal context) but with a **spatial cross-channel** context matched to the array's variance coherence — a lever nothing here has tried. Embeddable: a few adds to accumulate neighbour |e| + a context→k lookup, backward-adaptive, RTL-trivial. Risk to measure: if the per-block k already tracks local variance well, the cross-channel context may add little — a clean, cheap test settles it._
+
+- _**Cycle 7 RESULT (branch `compression-cycle-2026-07-16`, measured on all 4 real sets at 15 000 samp, `results/cycle_bench.csv` + `results/cycle_search.csv`):** all three double-verified PROMOTE (no splits); **(1) PROMOTED as the new best, (2) and (3) RETIRED.** **(1) `LMS4+Rice+xchan_bestpartner`** — order-4 predictor under the best-partner front-end **DOMINATES on BOTH axes** the prior incumbent `LMS+Rice+xchan` (higher ratio, cost 0.039 < 0.057) AND the order-8 bestpartner (0.039 < 0.063, now RETIRED) on ALL 4 real sets (hyser 1.480×, otb 2.162×, cemhsey 1.956×, capgmyo 1.350×). New leaderboard best. **P2 confirmed a 3rd real cycle: order-4 beats order-8, and is the reliable way to buy cost back under any front-end.** **(2) `LMS+Rice+xchan_multiparent`** — two summed parents captured only ~half the single-parent gain (over-subtracts the correlated up/left parents' shared mode; marginal-vs-multiple regression) → RETIRED. **A summed multi-parent subtract is a dead end; richer topology needs a joint 2×2 solve = the already-dead multi-tap transform.** **(3) `LMS+Rice+xctx`** — cross-channel context-adaptive Rice k lost 2.3–2.8% vs plain per-block k (below even plain LMS+Rice); after LMS, H(e_c|neighbour energy) ≈ H(e_c) → RETIRED. **Extends P5: context-modeling the Rice parameter is a dead lever too, not just swapping the engine.**_
+  - _**Cycle 8 ranked next hypotheses (proposals only, from the refreshed INSIGHTS frontier — the rank-1 subtract on order-4 is now the proven ceiling; every "more taps" idea reduces to a dead-end joint transform, so the live levers are a scale-orthogonal two-stage front-end and embeddability/port closure):**_
+    - _**(1, highest payoff/cost) Scale-matched two-stage spatial front-end: global CAR then local best-partner.** Knob: a backward-gated ACAR common-mode lift followed by the PROMOTED order-4 best-partner subtract on the CAR residual. Why: ACAR (+14.4% on tight OTB) and the local pairwise subtract capture *different, non-interchangeable* MI slices (global common-mode vs local pairwise, P1-refinement); unlike the failed multi-parent, the two stages are **orthogonal by construction** (global mean vs local pairwise) so they cannot double-count. Build on the new promoted best. Risk: on large arrays CAR may not clear its gate — measure whether the slices are additive or redundant._
+    - _**(2) Backward-adaptive per-block best-partner RE-SELECTION (port-caveat closure, embeddability lever not a ratio play).** Knob: re-select partner id + β per block from the previous reconstructed block (decoder mirrors → zero side-info) instead of the offline whole-signal selection. Why: closes the promoted codec's last port caveat (offline partner/β). Measure whether per-block re-selection holds the offline ratio; if so the promoted codec becomes fully on-node with zero side-info._
+    - _**(3, low priority / high risk) Robust integer 2×2 joint local decorrelation.** Knob: replace the summed marginal two-parent subtract with a genuine joint (normal-equations) 2-parent solve that does NOT corrupt both channels (the property that sank iklt_adaptive). Why: the only theoretically-valid way to add a second parent. Risk: it is a data-dependent multi-tap transform (P3 dead end) unless a cheap, robust, asymmetric integer form is found. De-prioritized below (1)/(2)._
 
 ## Verdict key
 - **embeddable** — integer, causal, bounded state/look-ahead, fits the sEMG budget
@@ -38,7 +48,10 @@ _Cycle log (what's already been tried, so don't re-recommend it):_
 |---|---|---|---|---|
 | 1 | **Cross-channel residual decorrelation (MPEG-4 ALS multichannel coding)** | Adaptively weighted subtraction of a *reference channel's residual* from the coding channel's residual — removes shared, temporally-unpredictable spatial content a per-channel predictor cannot. This is exactly the `+xchan` lever, and the literature's cross-correlation-of-residuals estimator matches our achieved +17.5% real gain. | **embeddable** (already our best) | beta/weight must be per-block, not whole-signal (our current port caveat) |
 | 2 | **Best-partner / multi-neighbour channel pairing (ALS low-complexity joint coding)** — **IMPLEMENTED cycle 2 (`LMS+Rice+xchan_bestpartner`, non-dominated).** DONE, not a new proposal. | Instead of a fixed grid parent, pick the most-correlated partner per channel and only subtract when it pays. Choi et al. (Sensors 2014) give the *integer, causal* recipe: gate joint coding by the **normalized residual cross-correlation** DF = \|Σe₁e₂\|/√(Σe₁²·Σe₂²) ≥ ~0.45, and pick the reference channel by **lowest AbsMean residual** (smallest Rice-k). | **embeddable — shipped** | open follow-up only: widen candidate set beyond 4-neighbourhood (channel-clustering) / 2-tap joint |
-| 3 | **★ Data-DEPENDENT adaptive 2×2 integer-lifting rotation (backward-adaptive Givens angle)** — TOP PICK this cycle | Keeps the retired iklt's reversible 3-lift shear butterfly (Srinivasan IntSKLT / lifting-of-Givens: shift+add, no float mult) but makes the rotation angle θ **backward-adaptive per block** — quantized θ derived from the previous **reconstructed** block's neighbour covariance, decoder recomputes it (zero side-info). Cascaded over grid neighbour pairs → genuinely multi-tap. The KLT is the optimal linear decorrelator only when its basis matches the covariance (P3); the retired *fixed* 45° basis captured only +8.8% of real cross-channel gain vs the data-dependent single-neighbour's +18.0% (exp 002) precisely because real HD-sEMG covariance is anisotropic/non-stationary. Adapting the single angle is the minimal lever that closes that measured gap. | **borderline → embeddable** | angle from 2 covariance accumulators/pair on a short reconstructed window + a **quantized-θ → lift-coeff lookup** (no per-block eigendecomposition, no float); shift+add lifts. NOT the retired fixed iklt (fixed→adaptive) nor the retired scalar adaptive-beta (orthogonal rotation of both channels vs asymmetric rank-1 subtract). Verify the per-block covariance accumulate stays inside budget |
+| — | **Data-DEPENDENT adaptive 2×2 integer-lifting rotation (backward-adaptive Givens angle)** — **RETIRED 2026-07-14** (`LMS+Rice+iklt_adaptive`, exp 003) | Backward-adaptive integer-KLT rotation angle. Captured only +1.7–3.3% real xchan gain (−0.5% CapgMyo), *worse* than the retired fixed iklt; dominated on all 4 real sets. A backward-estimated angle is stale/noisy and an energy-preserving rotation corrupts BOTH channels (less robust than the rank-1 subtract). Multi-tap spatial transforms — fixed or adaptive — are a settled dead end (P3-refinement). | **retired** — do NOT re-propose | — |
+| A | **★ Order-4 LMS under best-partner (`lms4bp`)** — cycle-7 slate #1 (highest payoff/cost) | Right-size the temporal predictor (order 8→4, P2: order-4 beats order-8 at ~half state/ops) beneath the shipped, non-dominated best-partner spatial front-end. The winning cross-channel lever is unchanged; only the over-provisioned predictor shrinks. Could dominate the incumbent on BOTH axes (lower cost AND ≥ ratio), no new mechanism risk. | **embeddable** (strictly cheaper predictor than incumbent) | best-partner is DONE/non-dominated (not retired); this pairs it with the search-proven order-4 (`lms4s7+x*/b512`, 2.321×/0.027) |
+| B | **★ Multi-parent backward-adaptive rank-1 subtract (`LMS+Rice+xchan_multiparent`)** — cycle-7 slate #2 | Two causal grid parents (up + left), each its own backward-adaptive integer beta, residuals summed → rank-2 *local* decorrelation. Asymmetric rank-1-per-parent (residual-only injection, parent left clean) → robust under causal estimation noise, unlike the retired rotation. Targets the residual local spatial MI one parent leaves on high-|corr| arrays (P1). Zero side-info. | **borderline → embeddable** | +1 parent's state/ops vs single-parent; gate hard per-parent. **Distinct from RETIRED `xchan_adaptive`** (that was *single*-parent scalar beta) — a different topology, not a re-run |
+| C | **★ Cross-channel context-adaptive Rice (`LMS+Rice+xctx`)** — cycle-7 slate #3 (NOVEL, second-order axis) | Keep the Rice coder; **select k per sample from a backward context of recently-decoded neighbour residual magnitudes** (spatial-energy bucket → k, decoder mirrors → zero side-info). HD-EMG bursts are spatially coherent, so the residual is heteroscedastic / variance-correlated *across channels* even after mean decorrelation; conditioning k on neighbour energy exploits H(e_c \| neighbour energy) < H(e_c). **Not** the retired entropy-coder swap (`xchan_tans`, P5) — coder stays Rice, only its parameter's context gains cross-channel info; attacks across-channel heteroscedasticity a per-block k misses. | **borderline → embeddable** | few adds for neighbour \|e\| accumulate + context→k lookup, backward-adaptive, RTL-trivial. Risk: per-block k may already track local variance — cheap to test. JPEG-LS/CALIC context-modeling principle with a spatial cross-channel context |
 | 3b | **Adaptive Common Average Reference (ACAR) — rank-1 global common-mode front-end** | Subtract a (weighted) **mean across the array** from every channel before temporal prediction. Removes the shared common-mode component (movement/EMG drive, power-line, reference drift) that a pairwise / spanning-tree predictor structurally *cannot* fully cancel — a different spatial axis from best-partner, and the cheapest new lever by far (one running cross-channel sum per time sample). ACAR (Vaisman/Farina, MBEC 2014) adapts the referencing weights to the signal. Made lossless via a reversible integer S-transform-style lift: code the array total as a virtual channel, residuals as channel−round(CAR). | **borderline** | needs a reversible integer formulation (lift, not float mean); ~O(C) adds/sample for the shared sum (amortized O(1)/sample-ch) + one subtract — near-free. Gate per block so it can't hurt low-common-mode segments |
 | 4 | **FLAC fixed polynomial predictors (ord 0–3), best-per-block + Rice** | Cheapest possible upgrade over order-1 delta; near-LMS ratio at a fraction of the compute. | **embeddable** (implemented: `fixed0-3+Rice`, on the Pareto front) | none material — this is the value pick |
 | 5 | **NLMS / leaky / higher-order sign-LMS + Rice (ALS RLS-LMS direction)** | Normalised/leaky adaptation tracks non-stationary EMG better than plain sign-sign LMS; still one-pass. | **embeddable** | our search shows order>4 *hurts* real HD-sEMG — keep order small |
@@ -64,58 +77,58 @@ not as a candidate on this target.
 
 ## Recommendations — next codec to implement THIS cycle (embeddable, by expected gain/cost)
 
-All three cheap/fixed spatial levers are now spent or dead: per-block beta (cycle 1,
-retired), *pairwise* best-partner selection (cycle 2, shipped non-dominated), and the
-**fixed** data-independent integer-KLT (cycle 3, retired — its isotropic 45° basis
-captured only +8.8% real gain vs the data-dependent single-neighbour's +18.0%). The
-spatial lever still dominates temporal sophistication (~70× on real Hyser ablation),
-and cycle 3 pinpointed *where* the remaining spatial gain lives: in a **data-dependent
-weight/basis**, not a wider fixed one (P3). This cycle's slate spans three distinct
-axes — a data-dependent transform basis, the never-tested entropy back-end, and a
-distinct rank-1 spatial axis.
+Both prior open-frontier levers are now dead: the multi-tap spatial transform (fixed
+iklt cycle 3 AND adaptive iklt_adaptive cycle 4 — settled dead end, P3) and the entropy
+back-end swap (xchan_tans cycle 5 — spent negative, P5). Every remaining live *ratio*
+lever is either a variation on the proven adaptive rank-1 subtract, or a lever on an
+**axis nobody has measured**. This cycle's slate deliberately spans three such distinct
+axes — a right-sized temporal predictor, a richer spatial topology, and a novel
+second-order (variance) cross-channel context — so no two candidates are parameter
+variants of each other.
 
-1. **★ TOP PICK — Data-DEPENDENT adaptive integer-lifting rotation (backward-adaptive Givens angle, table #3).**
-   The direct, principled answer to cycle 3's negative result. Keep the retired iklt's
-   reversible 3-lift shear butterfly (multiplierless, lossless by construction) but make
-   the rotation **angle backward-adaptive per block**: quantize θ from the previous
-   *reconstructed* block's neighbour covariance, decoder recomputes it → **zero side-info**
-   (P4). The KLT decorrelates optimally only when its basis matches the covariance; the
-   fixed 45° basis was mismatched to anisotropic non-stationary HD-sEMG, which is the whole
-   measured +8.8%-vs-+18.0% gap (exp 002). Adapting the single angle is the minimal lever
-   that closes it while staying shift+add. Distinct from the retired fixed iklt
-   (data-independent → data-dependent) AND from the retired scalar adaptive-beta
-   (energy-preserving orthogonal rotation of *both* channels, cascaded multi-tap, vs an
-   asymmetric rank-1 subtract of *one*). Verdict **borderline → embeddable**: cost is the
-   iklt lifts + a cheap per-block covariance accumulate + a quantized-θ→coeff lookup (no
-   eigendecomposition, no float). Risk to watch: the per-block covariance estimate must stay
-   inside the neural 125-cyc budget; gate the rotation per block so it can't hurt
-   low-correlation segments.
-2. **tANS/rANS residual back-end vs Rice (table #6) — the never-tested entropy axis.**
-   Head-to-head vs. Rice on the *same* `LMS+Rice+xchan` predictor+front-end — the one lever
-   untouched across all four cycles, and orthogonal to the spatial front-end so composable
-   with #1 or the incumbent. Rice is optimal only for exactly-geometric residuals; real EMG
-   residual blocks deviate sub-Golomb, and a table-driven tANS approaches the true block
-   entropy (P5). FPGA-friendly (LOCO-ANS-style: table lookups + renorm, no per-symbol
-   division). Payoff is expected small and uncertain — the per-block freq table (side-info) +
-   reverse-encode buffer may cost more than the bits saved — but it is the only way to test
-   the back-end's marginal fraction, and a bench on the same predictor isolates it cleanly.
-3. **Adaptive Common Average Reference (ACAR) rank-1 common-mode front-end (table #3b).** The
-   cheapest new spatial lever and a distinct spatial axis: subtract the array's (weighted)
-   common-mode before temporal prediction via a reversible integer S-transform lift (code the
-   array total as a virtual channel). It removes the **shared common-mode** (movement drive /
-   power-line / reference drift) that a pairwise or rotation-based front-end structurally
-   cannot fully cancel — a different slice of the cross-channel mutual information (P1) — at
-   ~O(1)/sample-ch amortized cost, RTL-trivial. Lower ceiling than #1 (rank-1, not a full
-   transform) but near-zero cost → a real Pareto win if HD-EMG common-mode is material, and a
-   low-risk fallback if #1's adaptive basis under-delivers. Gate per block. Distinct from
-   cycle-1 beta and cycle-2 bestpartner (global mean, not a selected neighbour) and from #1
-   (rank-1 global vs pairwise rotation).
+1. **★ TOP PICK — Order-4 LMS under best-partner (`lms4bp`, table A).** The highest
+   payoff/cost live lever and the lowest-risk: keep the shipped, non-dominated best-partner
+   spatial front-end (the mechanism that works) and shrink the temporal predictor order 8→4
+   (P2 — order-4 beats order-8 on real Hyser/OTB at ~half the state/ops; the search point
+   `lms4s7+x*/b512` sits at 2.321×/0.027). Cycle-2 best-partner ran on the over-provisioned
+   order-8; on the cheaper, *better* order-4 predictor it could dominate the incumbent on
+   **both** axes — lower cost AND ≥ ratio — with no new mechanism to get wrong. Verdict
+   **embeddable** (strictly cheaper predictor). Distinct axis (temporal) from #2/#3.
+2. **Multi-parent backward-adaptive rank-1 subtract (`LMS+Rice+xchan_multiparent`, table B).**
+   A distinct *spatial topology*: two causal grid parents (up + left), each its own
+   backward-adaptive integer beta, residuals summed → a rank-2 *local* decorrelation. It stays
+   one asymmetric rank-1 subtract per parent (residual-only injection, parent left clean), so
+   it inherits the rank-1 subtract's robustness under causal estimation noise — unlike the
+   retired energy-preserving rotation that corrupts both channels (P3-refinement). Targets the
+   residual *local* spatial MI a single parent leaves, largest on high-|corr| arrays
+   (OTB/CEMHSEY/Hyser, P1). Zero side-info. **Distinct from the RETIRED single-parent scalar
+   `xchan_adaptive`** — this adds a second independent parent (a different topology), the exact
+   follow-up INSIGHTS open-frontier #2 endorses, not a re-run of the retired scalar. Gate hard
+   per-parent on cost (each parent adds state + ops); verify it clears the neural 125-cyc budget.
+3. **NOVEL — Cross-channel context-adaptive Rice (`LMS+Rice+xctx`, table C).** The only lever on
+   an axis nothing here has touched: the residual's **second-order** cross-channel structure.
+   Every prior spatial front-end removes correlated *means*; but HD-EMG bursts (motor-unit
+   action potentials) are spatially coherent, so the residual stays **heteroscedastic and
+   variance-correlated across channels** even after mean decorrelation. Keep the Rice coder, but
+   **select k per sample from a backward context of the recently-decoded neighbour residual
+   magnitudes** (spatial-energy bucket → k, decoder mirrors → zero side-info). This exploits
+   H(e_c | neighbour energy) < H(e_c) — a *conditional*-entropy reduction. Crucially this is
+   **not** the retired entropy-coder swap (`xchan_tans`, P5): the coder engine stays Golomb-Rice,
+   already at the floor for the *unconditional* residual; what changes is that its parameter's
+   context now carries cross-channel information, attacking the across-channel heteroscedasticity
+   a single per-block k structurally cannot track. It is the JPEG-LS/CALIC context-modeling
+   principle (condition the Golomb parameter on a causal context) with a **spatial cross-channel**
+   context matched to the array's variance coherence. Verdict **borderline → embeddable**: a few
+   adds for the neighbour-energy accumulate + a context→k lookup, backward-adaptive, RTL-trivial.
+   Risk to measure: if the per-block k already tracks local variance, the cross-channel context
+   may add little — a cheap, clean test settles it.
 
-Order reflects expected ratio gain per unit embedded cost for THIS device on the
-real OTB set: the highest-ceiling *new* spatial lever that directly closes the
-measured iklt basis-mismatch gap (#1) > the never-tested, composable entropy swap
-with a small but real ceiling (#2) > a near-free rank-1 spatial complement / fallback
-(#3). All three are genuinely distinct in mechanism, not parameter variants.
+Order reflects expected ratio gain per unit embedded cost for THIS device on the real
+grids: the lowest-risk predictor right-sizing that could dominate on both axes (#1) > a
+distinct spatial-topology extension of the one mechanism that works (#2) > a novel but
+higher-variance second-order lever on an untested axis (#3). All three are genuinely
+distinct in mechanism (temporal predictor vs spatial topology vs conditional entropy),
+not parameter variants of each other.
 
 ## Sources
 
@@ -136,6 +149,9 @@ with a small but real ceiling (#2) > a near-free rank-1 spatial complement / fal
 - [Lossless and Near-Lossless Audio Compression Using Integer-Reversible Modulated Lapped Transforms (RGate 221578983)](https://www.researchgate.net/publication/221578983_Lossless_and_Near-Lossless_Audio_Compression_Using_Integer-Reversible_Modulated_Lapped_Transforms) — precedent that an **integer-reversible transform realized as lifted Givens rotations** (shift+add, no float) feeding a **backward-adaptive Golomb-Rice/RLGR** coder is a working lossless pipeline; supports the reversibility + zero-side-info construction of TOP PICK #1's adaptive-angle rotation.
 - [Lossy-to-Lossless Hyperspectral Image Compression Based on Multiplierless Reversible Integer TDLT/KLT (IEEE 5075592)](https://ieeexplore.ieee.org/document/5075592/) — reversible integer KLT via lifting for cross-channel (spectral) decorrelation; corroborates that a multi-tap reversible integer inter-channel transform is lossless-by-construction and multiplierless (TOP PICK #1 mechanism).
 - [Vaisman, Jordanic & Farina, Adaptive common average filtering for myocontrol applications (Medical & Biological Engineering & Computing 2014)](https://link.springer.com/article/10.1007/s11517-014-1215-1) — signal-adaptive common-average referencing (ACAR) for HD-EMG, basis for rank-1 front-end #2 (paper reports myocontrol/SNR benefit, not a compression ratio).
+- [US7580585B2 — Lossless adaptive Golomb/Rice encoding and decoding of integer data using backward-adaptive rules (Google Patents)](https://patents.google.com/patent/US7580585B2/en) — backward-adaptive (zero side-info) Golomb/Rice parameter adaptation; the *backward-adaptive, decoder-mirrors-encoder* substrate cycle-7 candidate (3) `xctx` extends to a **cross-channel** context.
+- [Weinberger, Seroussi & Sapiro, The LOCO-I/JPEG-LS lossless image compression algorithm (context-conditioned Golomb parameter) — HP Labs / IEEE Trans. Image Proc. 2000](https://www.hpl.hp.com/loco/) — the context-modeling principle behind candidate (3): condition the Golomb parameter on a causal context (gradient buckets) to code a heteroscedastic residual below its unconditional entropy. `xctx` supplies a **spatial cross-channel** context (neighbour residual energy) matched to HD-EMG's spatially-coherent burst variance — the second-order lever no tried codec touches.
+- [Giurcaneanu, Tabus et al., Adaptive context-based sequential prediction for lossless audio compression (Signal Processing 2001)](https://www.sciencedirect.com/science/article/abs/pii/S0165168400001171) — parametric error modeling across many contexts feeding Golomb–Rice; precedent that context-conditioned Golomb coding lowers coded bits on a heteroscedastic residual (candidate 3 basis, paper-reported, unverified here).
 - [Adaptive Spatial Filtering of High-Density EMG for Reducing Noise and Artefacts in Myoelectric Control (ResearchGate 341365971)](https://www.researchgate.net/publication/341365971_Adaptive_Spatial_Filtering_of_High-Density_EMG_for_Reducing_the_Influence_of_Noise_and_Artefacts_in_Myoelectric_Control) — corroborates a large shared common-mode component across HD-EMG grids that global referencing removes (motivates #2's spatial lever).
 - [Efficient sequential compression of multi-channel biomedical signals (arXiv 1605.04418)](https://arxiv.org/abs/1605.04418) — streaming multivariate-RLS lossless coder exploiting spatial + temporal redundancy; reports beating prior state-of-the-art lossless ratios on EEG/ECG (paper-reported, unverified here) — supporting evidence that a multi-channel (multi-tap) predictor beats per-channel.
 - [Integer sub-optimal KLT for multi-channel lossless EEG compression (ResearchGate 253197278)](https://www.researchgate.net/publication/253197278_Integer_sub-optimal_Karhunen-Loeve_Transform_for_multi-channel_lossless_EEG_compression) — mirror of the IntSKLT source above.
