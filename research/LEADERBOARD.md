@@ -6,8 +6,14 @@ produced by the harness (`research/bench.py` + `research/search.py`), asserted
 bit-exact, and gated by `embedded_ok` — never by reasoning (non-negotiables #1,
 #2, #4). Maintained per Stage 6 of `../COMPRESSION_RESEARCH_AGENT_PROMPT.md`.
 
-_Updated: 2026-07-16 · branch `compression-cycle-2026-07-16`. Cycles 1 & 2 (2026-07-08,
-2026-07-10) merged. **This cycle PROMOTED a new best: `LMS4+Rice+xchan_bestpartner`**
+_Updated: 2026-07-19 · branch `compression-cycle-2026-07-19`. **Cycle 10 (2026-07-19) promoted
+NOTHING and retired NOTHING** — three unanimous-PROMOTE-verified candidates (two-stage
+CAR→best-partner cascade, joint 2-parent sign-LMS, backward-adaptive best-partner re-selection) all
+landed at ≤ the current best on real data and are kept as non-dominated Pareto corners; the leaderboard
+best `LMS4+Rice+xchan_bestpartner` is unchanged (see the 2026-07-19 cycle section below). Notably,
+`LMS4+Rice+xchan_bestpartner_adaptive` **closes the promoted best's offline-selection port caveat** at
+~zero ratio cost (zero side-info). Prior line — branch `compression-cycle-2026-07-16`. Cycles 1 & 2
+(2026-07-08, 2026-07-10) merged. **Cycle 7 PROMOTED a new best: `LMS4+Rice+xchan_bestpartner`**
 (order-4 predictor under the best-partner front-end) — beats the prior incumbent on all
 4 real sets at lower cost, unanimous PROMOTE. Seven codecs are now `retired=True` in
 `research/registry.py` (conclusively Pareto-dominated — kept, bit-exact, excluded from the
@@ -259,6 +265,52 @@ double-verified PROMOTE (no splits)**; **one promoted (new best), two retired**:
   flags + the promoted registration was added its cycle), report files, and `SURVEY.md` touched;
   `rtl/`/`sim/` untouched.
 
+## Cycle 2026-07-19 — two-stage cascade, joint 2-parent, best-partner re-selection — NONE promoted, NONE retired
+
+All four real sets reachable, benched at 15 000 samples (`results/cycle_bench.csv`); the current best
+`LMS4+Rice+xchan_bestpartner` reproduces its headline exactly (Hyser 1.4804×, OTB 2.1619×). Three distinct
+candidates, **all double-verified PROMOTE (no splits)**; **none beats the current best on real data → none
+promoted; all three non-dominated → none retired.** The leaderboard best is unchanged.
+
+| candidate | mechanism / axis | real (Hyser / OTB / CapgMyo / CEMHSEY) | cost | side-info | verdict |
+|---|---|---|---:|---|---|
+| `LMS4+Rice+acar+bestpartner` | two-stage cascade: global CAR → local best-partner (spatial, scales) | 1.4770× / **2.1795×** / 1.3505× / 1.9515× | 0.043 | 2×int16/ch | **kept** — non-dominated OTB max-ratio corner |
+| `LMS+Rice+xchan_joint2` | joint asymmetric 2-parent adaptive sign-LMS (spatial, joint count) | **1.4930×** / 2.1497× / 1.3504× / 1.9543× | **0.0366** | **zero** | **kept** — cost-dominant, dead-tie 4-set mean |
+| `LMS4+Rice+xchan_bestpartner_adaptive` | backward-adaptive best-partner re-selection (embeddability) | 1.4770× / 2.1531× / **1.3529×** / 1.9539× | 0.0387 | **zero** | **kept** — port-caveat closure, holds ratio ±0.4% |
+
+- **`acar+bestpartner` (frontier #1, spent — partial).** Isolated CAR-stage marginal gain over best-partner:
+  **+0.96 pp on the tight 64-ch OTB array (+0.81% ratio)**, **0 on CapgMyo (gate never fired, bit-identical)**,
+  **−0.26/−0.23 pp on the large 128-/320-ch Hyser/CEMHSEY arrays**. The two MI slices (global common-mode +
+  local pairwise) are additive **only where the global mode is a real eigenvector** (tight arrays); on large
+  arrays the fired CAR lift over-subtracts a mismatched global basis after best-partner took the local slice.
+  Non-dominated OTB max-ratio corner (2.1795×) → kept; loses the primary Hyser (−0.23%) at higher cost → not
+  promoted. **Frontier #1's "capture both slices everywhere" hope is disproven.**
+- **`joint2` (frontier #2/#3, spent positive — but ties).** One joint backward-adaptive sign-sign LMS on both
+  parents (up+left), taps co-adapting against the shared residual — the multiplierless 2×2 multiple-regression
+  solve. It **recovers the highest cross-channel gain of any codec on Hyser (+12.26%** vs best-partner +11.31%,
+  single-fixed +10.8%): the joint solve genuinely adds a second parent's MI where the retired *summed* multiparent
+  over-subtracted (marginal→multiple fix), asymmetric injection keeps parents clean (avoids the iklt_adaptive
+  both-channel corruption). But on the tight OTB array the *fixed* up+left pair (+17.77%) is below best-partner's
+  *selected* neighbour (+18.44%). Net: wins Hyser (+0.85%), loses OTB (−0.57%), **dead-tie on the 4-set mean
+  (−0.014%)** at lower cost (0.0366) and zero side-info. **Parent selection and parent count are substitutes,
+  not complements** — the joint solve works but only ties. Cost-dominant non-dominated entry → kept; not a robust
+  real-data beat → not promoted.
+- **`bpa` (frontier #3, spent positive — embeddability).** Per-block backward re-selection of (partner, β) from
+  the previous reconstructed block **holds the offline best-partner ratio within −0.08%…−0.41%** on the high-corr
+  sets and **beats it +0.18% on CapgMyo**, at **zero side-info + look-ahead 0** (drops the 2×int16/ch header and
+  the whole-signal look-ahead), cost 0.0387. The best-partner identity is stable within a recording, so per-block
+  re-derivation lands on the offline optimum minus a tiny burst-boundary transient. **The promoted best's last
+  port caveat is closed at ~zero ratio cost.** Dominates the best on CapgMyo → kept; loses the primary → not
+  promoted (never a ratio play).
+- **Sanity:** max real ratio 2.1795× (acar+bestpartner, OTB) ≪ 6× ceiling; every row bit-exact (`ok=True`), all
+  `embedded_ok`/`neural_ok`; no incumbent/best regression. Only report files + `SURVEY.md` touched this cycle —
+  **no retire flags set** (all three non-dominated), `research/registry.py` codec logic untouched; `rtl/`/`sim/`
+  untouched.
+- **Net:** the single-parent rank-1 subtract on order-4 (`LMS4+Rice+xchan_bestpartner`) remains the proven ratio
+  ceiling; three distinct attempts to exceed it (wider basis, more parents, cheaper estimation) all landed at ≤ the
+  best. **Port takeaway:** if the promoted best's offline-selection port caveat matters, port
+  `LMS4+Rice+xchan_bestpartner_adaptive` (same ratio, zero side-info, fully on-node).
+
 ## Best embeddable after search (real Hyser)
 
 `research/search.py` on `hyser_1dof_f1_s1` (15 000 samples, `results/06_search_hyser.csv`):
@@ -330,6 +382,17 @@ by each set's real neighbour correlation, consistent with the sweep.
   the simpler, near-identical choice. The best-partner selection carries the same
   offline whole-signal port caveat as before (embeddable form re-selects per
   block).
+- **2026-07-19 update (cycle 10) — the promoted best's port caveat is now CLOSED.**
+  `LMS4+Rice+xchan_bestpartner_adaptive` re-selects (partner, β) per block from the
+  previous reconstructed block (decoder mirrors it → **zero side-info, look-ahead 0**)
+  and **holds the promoted best's ratio within ~0.4%** on the high-corr sets (Hyser
+  1.4770× vs 1.4804×, OTB 2.1531× vs 2.1619×) while *beating* it on CapgMyo (1.3529×
+  vs 1.3505×), at cost 0.0387. If the offline whole-signal partner/β selection is not
+  acceptable on-node, **port this codec** — it is the fully streaming-legal realization
+  of the promoted best at essentially the same ratio. The `LMS+Rice+xchan_joint2` joint
+  2-parent predictor (cost 0.0366, zero side-info) is an even cheaper near-tie that *wins*
+  the primary Hyser (1.4930×) but regresses on OTB/CEMHSEY — a strong value alternative,
+  not a strict ratio win. **The headline best-ratio codec stays `LMS4+Rice+xchan_bestpartner`.**
 
 ## Status vs. the 6-stage plan
 
