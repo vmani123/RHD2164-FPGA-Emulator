@@ -6,7 +6,16 @@ produced by the harness (`research/bench.py` + `research/search.py`), asserted
 bit-exact, and gated by `embedded_ok` — never by reasoning (non-negotiables #1,
 #2, #4). Maintained per Stage 6 of `../COMPRESSION_RESEARCH_AGENT_PROMPT.md`.
 
-_Updated: 2026-07-19 · branch `compression-cycle-2026-07-19`. **Cycle 10 (2026-07-19) promoted
+_Updated: 2026-07-25 · branch `compression-cycle-2026-07-25`. **Cycle 13 (2026-07-25) promoted NOTHING and
+RETIRED TWO.** Three unanimous-PROMOTE-verified candidates were measured on all 4 real sets
+(`results/cycle_bench.csv`): `LMS4+Rice+xres` (residual/innovation-domain rank-1 subtract) lost on all 4 at
+higher cost → **RETIRED**; `LMS4x2+Rice+xchan_bestpartner` (regime-switched K=2 tap-set bank) lost on all 4 at
+higher cost → **RETIRED**; `LMS4+Rice+xchan_joint2_bpa` (best-PAIR selection fused with the joint 2-parent
+solve) set a **record +12.45% cross-channel gain and the highest Hyser ratio of any registered codec (1.4956×,
++1.03% over the best)** but regressed on OTB (−0.81%) and CEMHSEY (−0.21%) for a −0.090% 4-set mean → **kept,
+non-dominated, NOT promoted**. The leaderboard best `LMS4+Rice+xchan_bestpartner` is **unchanged for a fourth
+consecutive cycle**, and the port pick is untouched. Nine codecs are now `retired=True`. See the
+2026-07-25 cycle section below. Prior line — branch `compression-cycle-2026-07-19`: **Cycle 10 (2026-07-19) promoted
 NOTHING and retired NOTHING** — three unanimous-PROMOTE-verified candidates (two-stage
 CAR→best-partner cascade, joint 2-parent sign-LMS, backward-adaptive best-partner re-selection) all
 landed at ≤ the current best on real data and are kept as non-dominated Pareto corners; the leaderboard
@@ -310,6 +319,67 @@ promoted; all three non-dominated → none retired.** The leaderboard best is un
   ceiling; three distinct attempts to exceed it (wider basis, more parents, cheaper estimation) all landed at ≤ the
   best. **Port takeaway:** if the promoted best's offline-selection port caveat matters, port
   `LMS4+Rice+xchan_bestpartner_adaptive` (same ratio, zero side-info, fully on-node).
+
+## Cycle 2026-07-25 — innovation-domain subtract, selected-pair joint solve, regime-switched tap bank — NONE promoted, TWO retired
+
+All four real sets reachable, benched at 15 000 samples (`results/cycle_bench.csv`, 114 rows); the current
+best `LMS4+Rice+xchan_bestpartner` reproduces its headline exactly (Hyser 1.4804×, OTB 2.1619×, CapgMyo
+1.3505×, CEMHSEY 1.9555×). Three distinct candidates, **all double-verified PROMOTE (no splits)**; **none
+beats the current best on real data → none promoted; two conclusively Pareto-dominated → RETIRED.**
+
+| candidate | mechanism / axis | real (Hyser / OTB / CapgMyo / CEMHSEY) | cost | side-info | verdict |
+|---|---|---|---:|---|---|
+| `LMS4+Rice+xres` | rank-1 subtract moved into the **innovation** (residual) domain | 1.4663× / 2.0936× / 1.3492× / 1.9371× | 0.0412 | **zero** | **RETIRED** — dominated on all 4, higher cost |
+| `LMS4+Rice+xchan_joint2_bpa` | best-**PAIR** selection fused with the joint 2-parent solve | **1.4956×** / 2.1444× / **1.3506×** / 1.9515× | 0.0500 | **zero** | **kept** — non-dominated Hyser/CapgMyo max-ratio corner |
+| `LMS4x2+Rice+xchan_bestpartner` | regime-switched **K=2 order-4 tap-set bank** (temporal) | 1.4763× / 2.1328× / 1.3423× / 1.9543× | 0.0549 | 2×int16/ch | **RETIRED** — dominated on all 4, higher cost |
+
+**Isolated cross-channel gain on REAL data** (achieved, vs temporal-only `LMS+Rice` — the established convention):
+
+| codec | Hyser | OTB | CapgMyo | CEMHSEY |
+|---|---:|---:|---:|---:|
+| `LMS4+Rice+xchan_joint2_bpa` | **+12.45%** (record) | +17.48% | **+1.38%** | +12.85% |
+| `LMS4+Rice+xchan_bestpartner` (best) | +11.31% | **+18.44%** | +1.37% | **+13.08%** |
+| `LMS4x2+Rice+xchan_bestpartner` | +11.00% | +16.85% | +0.75% | +13.01% |
+| `LMS4+Rice+xres` | +10.25% | +14.70% | +1.27% | +12.02% |
+
+- **`xres` — the innovation-domain lever is LIVE but strictly WORSE (RETIRED).** Coding `ê_c = e_c − (β·e_p >> 8)`
+  against the parent's own order-4 LMS residual, β sign-sign on the residual pair, partner re-selected per block by
+  estimated Rice bits (Choi's DF-on-residuals), zero side-info. It captures **+10.3…+14.7%** real cross-channel gain
+  — the mechanism works — but **1.1–3.7 pp below** the identical rank-1 subtract in the raw domain, losing on all 4
+  sets (−0.95% hyser, **−3.16% otb**, −0.09% capgmyo, −0.94% cemhsey) at higher cost (0.0412 > 0.0394). The
+  pre-registered risk materialized: with matched low-order per-channel predictors the taps converge to near-identical
+  values, so the whitener **commutes** with the subtract (same subspace, no new MI), while the whitened pair is a
+  strictly worse-conditioned regressor for β — worst exactly on OTB, the array with the most shared low-frequency
+  power to lose. → INSIGHTS **P1c**.
+- **`joint2_bpa` — frontier #1 spent: selection and count take the MAX, not the sum (KEPT).** Jointly solving the
+  per-block backward-**selected** best pair (≤6 pairs of the causal 4-neighbourhood, closed-form 2×2 Cramer/SSE from
+  one shared block Gram, zero side-info, look-ahead 0) posts the **highest cross-channel gain ever measured on the
+  primary Hyser array (+12.45%)** and the **highest Hyser ratio of any registered codec (1.4956×, +1.03% over the
+  best)**, plus the CapgMyo lead — but loses tight OTB (−0.81%) and CEMHSEY (−0.21%), 4-set mean −0.090%. Isolating
+  selection alone (vs the fixed-pair `joint2`): +0.176% hyser, +0.014% capgmyo, **−0.245% otb**, −0.144% cemhsey.
+  Theory: once the joint 2-tap solve spans a 2-D subspace of the neighbourhood, *which* pair is a second-order bias
+  reduction whose estimation variance (6 candidates from one 256-sample Gram) is first-order. Genuine non-dominated
+  corner → kept; not a robust real-data beat → not promoted. → INSIGHTS **P1b refinement**.
+- **`swlms` — frontier #2 spent NEGATIVE: parameter banks fragment adaptive estimators (RETIRED).** K=2 order-4
+  sign-sign tap-sets per channel, active set chosen by a backward activity state (fast vs slow leaky |e| integrator,
+  bit-length compare, dead-band hysteresis, zero side-info), with the front-end and entropy back-end **byte-identical
+  to the promoted best**. Lost on all 4 (−0.27% hyser, −1.35% otb, −0.61% capgmyo, −0.06% cemhsey) at higher cost
+  (0.0549). Diagnostic by exclusion: the **cross-channel gain also fell** (+11.00/+16.85/+0.75/+13.01) though the
+  spatial code is unchanged — the bank degraded the residual the front-end codes. On the near-stationary synthetics
+  it is a dead tie (+11 B / −24 B), i.e. the detector works and there is nothing to detect. Theory: an adaptive filter
+  *is* a context model; K=2 halves each set's consecutive-sample runs and a fixed-step sign-sign LMS re-converges after
+  every switch, while the sign-only update already absorbs pure amplitude modulation for free. → INSIGHTS **P4b**
+  (same failure as the retired `xctx`, moved from the coder into the predictor).
+- **Sanity:** every one of the 114 rows is bit-exact (`ok=True`) with `embedded_ok`/`neural_ok` OK; max real ratio in
+  the sweep **2.1795×** (`acar+bestpartner`, OTB) ≪ the 6× leak ceiling; the incumbent best and every kept codec
+  reproduce their prior numbers (no regression). Search (`results/cycle_search.csv`, hyser+otb, 60 configs) converged
+  to **`lms4s7+x6/b512` — mean 1.8204×, cost 0.0271, 26 enc cyc/sample-ch**, with the ablation reconfirming
+  cross-channel **+14.83%** vs order 4→8 **+0.79%** / shift **+0.16%** / block **+0.15%** (P1, P2 hold).
+- **Net:** the spatial front-end is at a **shared ceiling** — six structurally different mechanisms now agree within
+  **±1%** on every real set (Hyser 1.48–1.50×, OTB 2.13–2.18×, CapgMyo 1.342–1.353×, CEMHSEY 1.951–1.956×) — and the
+  first attack on the *temporal* residual entropy (a predictor bank) came back negative. **Port pick unchanged**;
+  `LMS4+Rice+xchan_bestpartner_adaptive` remains the zero-side-info codec to port if the offline-selection caveat
+  matters.
 
 ## Best embeddable after search (real Hyser)
 

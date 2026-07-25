@@ -103,6 +103,51 @@ is not. Every novel design faces the same bars: lossless + bit-exact, `embedded_
 - **Implication:** the joint solve is proven and available (a cheap multiplierless sign-LMS, not a matrix), but on
   its own it only ties the best. The unspent combination is **best-of-N-partner *selection* fused with the joint solve**
   (jointly solve the best *pair*, not a fixed up+left pair) — the one lever that could stack selection AND count.
+- **Refinement (2026-07-25, `LMS4+Rice+xchan_joint2_bpa` — the fusion was BUILT and MEASURED; selection and count
+  do NOT stack, they take the MAX). KEPT, non-dominated, not promoted.** Jointly solving the *per-block backward-selected
+  best pair* (≤6 pairs of the causal 4-neighbourhood, scored by a closed-form 2×2 Cramer/SSE from one shared block Gram,
+  zero side-info) delivered the **highest cross-channel gain ever measured on the primary Hyser array: +12.45%** (vs
+  fixed-pair joint2's +12.26% and selected-single best-partner's +11.31%) and the **highest Hyser ratio of any registered
+  codec, 1.4956× (+1.03% over the leaderboard best)** — yet it **lost tight OTB (2.1444×, −0.81%; +17.48% xchan gain vs
+  best-partner's +18.44%)** and CEMHSEY (−0.21%), for a **−0.090% 4-set mean**. Isolating selection alone (vs the
+  fixed-pair joint2 at the same order): **+0.176% hyser, +0.014% capgmyo, −0.245% otb, −0.144% cemhsey.**
+- **Theory (why fusion yields the max, not the sum):** both levers approximate the *same* object — the conditional mean
+  `E[x_c | causal neighbourhood]`. Once the joint 2-tap solve spans a 2-D subspace of that neighbourhood, a *selected*
+  pair and a *fixed* pair usually span nearly the same subspace, so choosing the pair is a **second-order bias reduction**
+  whose **estimation variance** is first-order: the argmin runs over 6 candidates scored from a single 256-sample Gram, and
+  selection variance grows with candidate-set size while its bias payoff does not. On the large diffuse Hyser array count
+  dominates and selection adds a residual +0.19 pp; on the tight OTB array selection would dominate, but the 6-candidate
+  *pair* criterion over-fits the block and gives back more than it wins. **Corollary (bias–variance for backward selection):
+  widen the candidate set only where the per-block statistic is well-estimated; the 4-candidate single-parent argmin is
+  already at the useful limit on 256-sample blocks.**
+- **Implication (frontier-closing):** four structurally different spatial mechanisms — selected single parent, fixed
+  jointly-solved pair, selected jointly-solved pair, CAR→best-partner cascade — now agree within **±1%** on every real set
+  (Hyser 1.48–1.50×, OTB 2.13–2.18×, CEMHSEY 1.951–1.956×, CapgMyo 1.342–1.353×). **The cross-channel front-end has hit a
+  shared ceiling; adding spatial degrees of freedom is a spent lever.** Bits now live in the temporal residual's own
+  entropy or nowhere reachable by these mechanisms.
+
+### P1c — The cross-channel rank-1 gain must be estimated in the RAW domain, not the innovation (residual) domain: after a per-channel whitener the two domains nearly coincide, and the whitened regressor is strictly worse-conditioned.
+- **Evidence (2026-07-25, `LMS4+Rice+xres` — RETIRED).** Moving the rank-1 subtract from *before* to *after* the
+  per-channel order-4 LMS (`ê_c = e_c − (β·e_p >> 8)`, β sign-sign on the residual pair, partner re-selected per block by
+  estimated Rice bits of `ê_c` — Choi's DF-on-residuals gate, zero side-info) captured a **live but strictly smaller**
+  cross-channel gain on every real set: **+14.70% otb / +10.25% hyser / +1.27% capgmyo / +12.02% cemhsey**, against the
+  raw-domain best-partner's **+18.44 / +11.31 / +1.37 / +13.08** (−1.1…−3.7 pp). Ratios **1.4663 hyser / 2.0936 otb /
+  1.3492 capgmyo / 1.9371 cemhsey** — below the leaderboard best on all 4 (−0.95%, −3.16%, −0.09%, −0.94%) at higher cost
+  (0.0412 > 0.0394) → Pareto-dominated, retired.
+- **Theory (two compounding failures).** (1) **Domain collapse / commutation.** Every channel of an HD-sEMG array observes
+  the same band-limited process, so the *independently* adapted per-channel order-4 taps converge to near-identical values,
+  `w_c ≈ w_p`. Then the innovation is one *shared* LTI whitener applied to both rows, and a linear filter **commutes** with
+  a rank-1 subtract: `e_c − β e_p ≈ (1 − W(z))(x_c − β x_p)`. The two domains are essentially the same subspace, so the
+  premise that "the raw-power and innovation-power objectives genuinely differ" is **empirically false on this data** —
+  there is no extra mutual information waiting in the innovation domain. (2) **Conditioning.** Given (1) there is no gain
+  to win, but there is a real loss: `argmin_β Var(e_c − β e_p)` is estimated from the *whitened* pair, whose shared
+  low-frequency power — precisely what made the raw regressor well-conditioned — has been stripped by the whitener. The
+  estimator's variance rises, and β-estimation noise is injected straight into the coded innovation. The loss is largest
+  on OTB (−3.7 pp), the tightest, most strongly common-mode array, i.e. the one with the most low-frequency shared power
+  to lose. **General rule: estimate a decorrelation weight in the domain where the correlation you are exploiting has the
+  most energy — before whitening, never after.** (Contrast: MPEG-4 ALS's residual-domain joint stereo pays off because
+  its per-channel predictors are *high-order and genuinely different*; with matched low-order adaptive taps the mechanism
+  has no room.)
 
 ### P2 — Temporal prediction saturates early; deeper prediction *hurts* on real data.
 - **Evidence:** order-4 LMS beats order-8 on both Hyser and OTB (order 4→8 *costs* ratio in
@@ -177,6 +222,30 @@ is not. Every novel design faces the same bars: lossless + bit-exact, `embedded_
   side-info/look-ahead it costs is pure loss. Frontier #3 (port-caveat closure) is spent **positive**: the promoted
   best now has a fully on-node, streaming-legal, zero-side-info realization at the same ratio.
 
+### P4b — State-indexed *parameter banks* are a dead lever on this data, wherever the parameter lives: HD-sEMG segments are too short relative to an adaptive estimator's convergence time to amortize the split.
+- **Evidence (2026-07-25, `LMS4x2+Rice+xchan_bestpartner` "swlms" — RETIRED).** Holding **K=2** order-4 sign-sign LMS
+  tap-sets per channel and selecting the active set from a backward-derived activity state (fast vs slow leaky |e|
+  integrator compared by bit-length, dead-band hysteresis, zero side-info), with the *front-end and entropy back-end
+  byte-identical to the promoted best*, **lost on all 4 real sets**: 1.4763 hyser (−0.27%), 2.1328 otb (−1.35%), 1.3423
+  capgmyo (−0.61%), 1.9543 cemhsey (−0.06%); 4-set mean −0.61%; higher cost (0.0549 > 0.0394) → dominated, retired. On the
+  near-stationary synthetics it is a **dead tie** (+11 B on sc0.6, −24 B on sc0.9) — the detector works, there is simply
+  nothing to detect. Diagnostic by exclusion: the *cross-channel* gain also **fell** (+11.00 / +16.85 / +0.75 / +13.01 vs
+  the parent's +11.31 / +18.44 / +1.37 / +13.08) **even though the spatial code is identical** — proof the bank degraded
+  the residual the front-end then codes.
+- **Theory.** (1) **An adaptive filter is itself a context model**, so splitting it into K state-indexed sets is the same
+  *model-cost-without-payoff* failure as `xctx`'s 12 Rice-k buckets (P5-extension), moved from the coder into the
+  predictor. A sign-sign LMS has a fixed ±1 step, so its convergence time is measured in *consecutive* samples; a
+  regime-switched filter never gets a long run — every switch resumes on a tap vector last updated a regime-dwell ago and
+  now stale, and the re-convergence transient costs more than regime-matched taps save. (2) **The premise over-stated the
+  regime contrast**: the sign-sign update is *amplitude-invariant* (it uses only signs), so a single filter already absorbs
+  a pure amplitude modulation for free — the compromise bias the bank was built to remove was largely absent, while the
+  fragmentation cost was fully present. (3) **The loss ordering confirms it**: damage is largest where the residual is
+  closest to stationary (otb −1.35%, capgmyo −0.61%) and smallest on the most non-stationary set (cemhsey −0.06%).
+- **Implication:** do not re-propose *any* state/context-indexed parameter bank on this data — predictor taps, Rice
+  parameter, step size, or block statistics. If a mechanism needs regimes, it must either share statistics across regimes
+  (shrinkage toward a pooled estimate) or be non-adaptive per regime (a closed-form estimator with no convergence time) —
+  and it must justify why HD-sEMG dwell times exceed the estimator's convergence time, which K=2 with hysteresis did not.
+
 ### P5 — Rice/Golomb is near-optimal for the (near-geometric) residual; the entropy back-end is NOT a lever here (proven negative on real data).
 - **Evidence:** every embeddable codec here uses adaptive Golomb-Rice and lands close to the
   offline generic references (lzma/zstd) it should not be able to reach with a per-symbol coder.
@@ -211,6 +280,52 @@ is not. Every novel design faces the same bars: lossless + bit-exact, `embedded_
 ---
 
 ## Open frontier (untried levers, ranked by expected payoff/cost)
+
+_**2026-07-25 (cycle 13) — the two top-ranked frontier levers are now SPENT, one positive-but-not-decisive and one
+negative; a third, brand-new axis was opened and closed the same cycle.** **#1 (selection fused with the joint 2-parent
+solve, `xchan_joint2_bpa`) was built and measured: it set a record — highest cross-channel gain ever on the primary
+Hyser array (+12.45%) and the highest Hyser ratio of any registered codec (1.4956×, +1.03% over the best) — but lost OTB
+(−0.81%) and CEMHSEY (−0.21%) for a −0.090% 4-set mean. Selection and count take the MAX, not the sum (P1b refinement).
+KEPT non-dominated, not promoted.** **#2 (attack the residual entropy in the predictor) was spent NEGATIVE via the
+regime-switched tap-set bank `swlms`: −0.06…−1.35% on every real set, dominated, RETIRED — state-indexed parameter banks
+fragment an adaptive estimator faster than they match its regimes (P4b).** **A new axis, the DOMAIN of the cross-channel
+subtract (`xres`, raw vs innovation), was opened and closed negative: −0.95…−3.16%, dominated, RETIRED — after a
+per-channel whitener the two domains nearly coincide and the whitened regressor is worse-conditioned (P1c).** Net: the
+leaderboard best `LMS4+Rice+xchan_bestpartner` is **unchanged for the fourth consecutive cycle**, and the spatial
+front-end is now demonstrably at a shared ceiling — six structurally different mechanisms within ±1% on every real set.
+**The live frontier below is deliberately re-ranked away from both the spatial front-end (ceiling, P1b) and from
+adaptive-parameter banks (P4b).** The honest reading is that ~1.48× on Hyser / ~2.16× on OTB is close to what this
+class of codec can do, and the remaining levers are (a) fixing the ONE unexploited structural property of the array
+(non-neighbour / long-range correlation), (b) buying cost rather than ratio, and (c) closing the gap to offline lzma,
+which still beats every embeddable codec on hyser (1.67×) and cemhsey (2.06×) by exploiting something none of ours does._
+
+1. **Long-range / clustered partner selection beyond the 4-neighbourhood** (P1 + P1b bias–variance corollary). Every
+   spatial mechanism tried so far draws its parent(s) from the **causal 4-neighbourhood** — a hard-coded assumption that
+   the array's mutual information is nearest-neighbour. But offline **lzma beats every embeddable codec on hyser
+   (1.67× vs 1.48×) and cemhsey (2.06× vs 1.96×)** while being a *pure long-range string matcher with no spatial model
+   at all* — strong evidence that real HD-sEMG arrays carry **non-local** redundancy (a motor unit's action potential
+   appears on several non-adjacent electrodes along the muscle-fibre direction) that a 4-neighbourhood cannot see.
+   Knob: keep the proven single-parent rank-1 backward-adaptive subtract (`bpa`), but let the per-block argmin range over
+   a **larger, cheaply-pruned** candidate set (e.g. a per-recording top-M correlated-channel shortlist, M≈8, re-derived
+   from the previous reconstructed block). **Highest live payoff** — it is the only untried lever aimed at MI the current
+   codecs structurally cannot reach. Risk (named by P1b): selection variance grows with candidate-set size, so the
+   shortlist must be *stabilized across blocks* (hysteresis / running score), not re-argmin'd from one 256-sample block.
+2. **Buy cost, not ratio: port-grade minimization at the measured ceiling** (P2 + P4). Given the ratio ceiling, the
+   remaining engineering value is a codec that holds ~the best ratio at materially lower cost. `search.py` this cycle
+   converged to **`lms4s7+x6/b512` at mean 1.8204× / cost 0.0271 / 26 cyc/sample-ch** on the hyser+otb pair — already the
+   Pareto front's top point, and the ablation says cross-channel is worth **+14.83%** while order 4→8 is worth only
+   +0.79%, shift +0.16%, block +0.15%. Knob: re-run the search sweep *including* the `bpa` front-end and block 512/1024,
+   and record the cheapest configuration within 0.5% of the best ratio as the port pick. Low mechanism risk, immediate
+   port value, no new codec required.
+3. **Understand *what lzma is finding* before proposing anything else spatial** (diagnostic, not a codec). lzma wins
+   hyser by +13% and cemhsey by +5% over every embeddable codec while losing badly on otb (1.58× vs 2.18×) and capgmyo
+   (1.17× vs 1.35×). That split is a *measurable fingerprint* of the redundancy class our codecs miss. Knob: an analysis
+   pass (no registry change) measuring, on hyser/cemhsey, (a) the channel-pair correlation matrix beyond the
+   4-neighbourhood, (b) the residual's repeat-match statistics at lzma's window scale, (c) whether the win is temporal
+   long-range (quantization plateaus / DC steps) rather than spatial at all. Cheap, and it decides whether frontier #1 is
+   aimed at a real structure or at a mirage. **Do this before spending another cycle on spatial mechanisms.**
+
+_(Superseded ranking from 2026-07-19, kept for provenance:)_
 
 _2026-07-19 (cycle 10): **all three of last cycle's ranked frontier levers were spent this cycle**, and
 none produced a new best — the leaderboard best `LMS4+Rice+xchan_bestpartner` stands. #1 (two-stage
@@ -274,6 +389,27 @@ frontier is now the two *unspent combinations* of proven-working parts, plus a n
   a plain per-block adaptive k — below even plain LMS+Rice with no front-end — at ~2× cost. After LMS,
   H(e_c | neighbour energy) ≈ H(e_c) and context-splitting's model cost dominates (P5-extension). Do not
   re-propose *any* context-modeling of the Rice parameter as a ratio play, spatial or otherwise.
+- **Residual-domain (innovation) cross-channel subtract** (`LMS4+Rice+xres`, retired 2026-07-25): moving the rank-1
+  subtract from before to after the per-channel order-4 LMS. Captured +10.3…+14.7% real cross-channel gain — live, but
+  **1.1–3.7 pp below** the identical subtract in the raw domain — and lost on all 4 real sets at higher cost
+  (0.0412 > 0.0394). With matched low-order per-channel predictors the whitener **commutes** with the rank-1 subtract, so
+  the two domains are the same subspace (no new MI), while the whitened pair is a strictly worse-conditioned regressor for
+  β (P1c). Do not re-propose residual-domain / ALS-style joint-stereo-on-residuals unless the per-channel predictors are
+  first made genuinely heterogeneous — and P2 says they should not be.
+- **State-indexed parameter banks — regime-switched predictor** (`LMS4x2+Rice+xchan_bestpartner` "swlms", retired
+  2026-07-25): K=2 order-4 tap-sets per channel selected by a backward activity state, front-end and back-end identical to
+  the promoted best. Lost on **all 4** real sets (−0.06…−1.35%) at higher cost (0.0549), and even the *spatial* gain fell
+  though the spatial code was unchanged. An adaptive filter is already a context model; splitting it halves each set's
+  adaptation runs and a sign-sign LMS re-converges after every switch, and the sign-only update already absorbs amplitude
+  modulation for free (P4b). **Do not re-propose any state/context-indexed parameter bank — predictor taps, Rice k, step
+  size, or block statistics.** This closes the "attack the residual entropy in the predictor" frontier lever negative.
+- **[Kept, NOT retired — non-dominated corner, cycle 13 2026-07-25] Selected-pair joint 2-parent solve**
+  (`LMS4+Rice+xchan_joint2_bpa`): the fusion of best-partner *selection* with the joint 2-parent *count*, zero side-info,
+  look-ahead 0. Sets the record on the primary array — **highest cross-channel gain ever measured on Hyser (+12.45%)** and
+  the **highest Hyser ratio of any registered codec (1.4956×, +1.03% over the leaderboard best)** — and also leads on
+  CapgMyo, but loses OTB (−0.81%) and CEMHSEY (−0.21%) for a −0.090% 4-set mean, at the highest cost of the family
+  (0.0500). Not a dead end (Hyser/CapgMyo corner), not a global best. Its lesson is the frontier-closing one: selection and
+  count take the **max**, not the sum (P1b refinement), and the spatial front-end is at a shared ceiling.
 - **[Kept, NOT retired — non-dominated corner] Global common-mode CAR** (`LMS+Rice+acar`): a
   low-cost Pareto point on tight arrays (OTB +14.4%, 2.089×/0.0559 — cheaper than the incumbent)
   but not on large arrays where redundancy is local (P1-refinement). Registered, not the best,
