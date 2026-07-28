@@ -104,6 +104,66 @@ is not. Every novel design faces the same bars: lossless + bit-exact, `embedded_
   its own it only ties the best. The unspent combination is **best-of-N-partner *selection* fused with the joint solve**
   (jointly solve the best *pair*, not a fixed up+left pair) — the one lever that could stack selection AND count.
 
+### P1c — The spatial parent must be chosen by *achieved coded bits* over a *small, physically-motivated* candidate set. Globally optimising a cheap MI surrogate over a large one loses.
+- **Evidence (2026-07-28, `LMS4+Rice+xtree` — RETIRED).** A per-block Chow-Liu **maximum-weight
+  spanning forest** over ≤12 undirected neighbours per channel (8 grid + 4 axis-distance-2), edge
+  weight = |sign-sign cross-correlation| on the previous reconstructed block, coding in the forest's
+  topological order (zero side-info), with the *unchanged* shipped integer-LS β and Rice-bits keep/drop
+  gate behind it. The apples-to-apples control is `LMS4+Rice+xchan_bestpartner_adaptive` (`bpa`) —
+  identical predictor, β estimator, gate, block structure and zero side-info; **only the topology
+  criterion differs**. `xtree` lost on **all four** real sets: hyser 1.461730 vs 1.477020 (−1.04%), otb
+  2.134552 vs 2.153106 (−0.86%), capgmyo 1.349710 vs 1.352866 (−0.23%), cemhsey 1.945732 vs 1.953948
+  (−0.42%), at higher cost (0.0430 vs 0.0387). Isolated cross-channel gain **0.24–1.40 pp lower** on
+  every set (+9.91/+16.94/+1.31/+12.51% vs `bpa`'s +11.05/+17.96/+1.55/+12.99%). The mechanism was
+  genuinely exercised, not degenerate: **34.8–42.2% of chosen parents have a HIGHER grid index**
+  (structurally unreachable by any raster codec here) and **47.7–68.7% lie outside the causal
+  4-neighbourhood**.
+- **Theory, two compounding failures.** (1) **Wrong objective.** Chow-Liu maximises Σ I(u;v) under a
+  Gaussian/arcsine-law proxy, but coded length is set by the residual entropy achieved after a
+  *rounded, Q8-quantised, integer-LS* rank-1 subtract — not monotone in |ρ| across edges with
+  different variance ratios. `bpa` selects **directly on estimated Rice bits** across all its
+  candidates and can fall back to a second-best edge; `xtree` fixes topology from the surrogate first
+  and can then only *drop* the edge, making the channel a parentless root. (2) **Winner's curse.**
+  Each weight is estimated from 32 samples (256-sample block, 8× subsampled) over ~6C ≈ 768–1920
+  candidate edges; the **max** over that many noisy sample correlations is upward-biased and
+  systematically prefers long/weak edges — which is exactly what the 47.7–68.7% "outside the
+  4-neighbourhood" figure measures.
+- **Implication:** the small causal 4-neighbourhood is a **prior**, not a limitation — on a locally
+  correlated array (P1) the max-MI parent is already inside it, so global search has no headroom to
+  buy and only estimator variance to pay. Select on the true bits criterion, over few candidates. Do
+  not re-propose global channel-topology search (MST / clustering / permuted coding order) as a ratio
+  play.
+
+### P1d — Cross-channel LAG is a dead freedom along the *same* parent, but reading a *different* (opposite-side) channel at lag 1 is a real, previously unreachable MI slice — and it pays inversely to zero-lag correlation.
+- **Evidence (2026-07-28, `LMS4+Rice+xstfir` — KEPT, non-dominated CapgMyo corner).** Replacing the
+  scalar zero-lag subtract with a 4-tap spatio-temporal FIR (parent lags 0,1,2 + opposite-side
+  neighbour at lag 1, one joint sign-sign LMS, zero side-info) gave hyser 1.472533 (−0.53% vs best),
+  otb 2.108745 (−2.46%), cemhsey 1.950256 (−0.27%), **capgmyo 1.362200 (+0.87%, the highest ratio of
+  any codec or reference on that set)**. An **in-memory tap ablation on the REAL arrays** (everything
+  else byte-identical) splits it exactly:
+
+  | isolated term | hyser | otb | capgmyo | cemhsey |
+  |---|---:|---:|---:|---:|
+  | parent lags 1,2 (the "fractional-delay FIR") | −0.20% | **−2.86%** | −0.28% | −0.14% |
+  | opposite-side neighbour `x_q[n−1]` | +0.07% | **+1.56%** | **+1.08%** | −0.08% |
+  | net (all 4 taps vs zero-lag only) | −0.12% | −1.35% | **+0.80%** | −0.22% |
+
+- **Theory.** `x_p[n−1]`, `x_p[n−2]` are the *same channel's* short-lag past. At 1–2 kS/s they are
+  strongly collinear with `x_p[n]`, and once the order-4 temporal LMS has whitened channel c's own
+  past, I(x_c[n]; x_p[n−1], x_p[n−2] | x_p[n]) ≈ 0 — so the extra taps add **stochastic-gradient
+  misadjustment with no MI to pay for it**, and the damage is worst exactly where ρ(0) is largest and
+  the taps carry most weight (OTB −2.86%). MUAP *propagation delay* is not the exploitable structure
+  it looks like: what propagates is already captured by the zero-lag pairwise weight plus the
+  temporal predictor. By contrast `x_q[n−1]` is a **different channel** — a genuinely new spatial
+  degree of freedom — and lag 1 is merely the causality-legal way to read a higher-index row, which
+  the **time-major** coding order makes available. Its payoff scales *inversely* with ρ(0): CapgMyo
+  (neighbour |corr| ≈ 0.29) gets +1.08% from it, Hyser +0.07%.
+- **Implication:** the lever worth keeping is **time-major coding order** (it unlocks the far-side
+  neighbour, a direction raster order structurally cannot reach), not a delay-compensating FIR. This
+  is also the first mechanism that adds gain **where P1 says spatial gain is scarce** — a
+  low-ρ(0)-array specialist, complementary to (not competitive with) the high-ρ(0) best-partner
+  family. Do not re-propose multi-lag prediction from the *same* parent.
+
 ### P2 — Temporal prediction saturates early; deeper prediction *hurts* on real data.
 - **Evidence:** order-4 LMS beats order-8 on both Hyser and OTB (order 4→8 *costs* ratio in
   the ablation); the registry default was over-provisioned at order-8.
@@ -208,9 +268,76 @@ is not. Every novel design faces the same bars: lossless + bit-exact, `embedded_
   spent lever too, for the same reason the engine swap is: Rice already sits at the floor and there is
   no sub-Golomb fraction to amortize the model cost.
 
+### P6 — After an order-4 LMS the HD-sEMG residual is white **at ALL lags**, not just short ones: long-lag / periodic (pitch-tap, MUAP-firing-period) prediction has no MI to remove.
+- **Evidence (2026-07-28, `LMS4+Rice+ltp` — RETIRED).** A gated long-term tap `e'[n] = e[n] −
+  round(g·e[n−T])` after the order-4 short-term LMS, with (T ∈ [64,200] ⇒ 32–10 pps, integer-LS g,
+  ρ ≥ 3/8 gate) re-derived per block per channel from the previous reconstructed residual (zero
+  side-info). Forcing the gate off **in memory** gives a byte-identical build minus the tap, so the
+  tap's contribution on real data is exact: **−0.012% (hyser), +0.003% (otb), −0.035% (capgmyo),
+  +0.022% (cemhsey)** — i.e. **zero, and negative on two of four** — *despite the gate firing on
+  1.1% / 3.8% / 11.4% / 11.7% of block-channels. The mechanism engaged and bought nothing.* The
+  codec's entire +0.07…+0.51% edge over `LMS+Rice` is the order-8→4 predictor change (P2), not the
+  LTP stage: its (hyser+otb) mean 1.58331 sits inside the order-4 temporal-only baseline
+  `lms4s8/b256` = 1.5834 (`results/cycle_search.csv`) to ±0.006%.
+- **Theory.** A *single* motor unit fires quasi-periodically, but a surface electrode integrates many
+  **asynchronously firing** motor units. The superposition of ≥ ~5 independent renewal processes with
+  ISI CV ≈ 0.1–0.3 converges to a near-Poisson point process, whose autocorrelation is flat away from
+  lag 0 — so the *observed* residual has no usable ρ(T) peak even though every constituent train has
+  one. Periodicity that exists per-source but not in the mixture is not codeable. What the 3/8 gate
+  then crosses is mostly **estimator noise** over a 128-point window, and the fitted g fits that noise
+  into the current block — hence the *negative* contribution precisely where the gate fires most
+  (CapgMyo, 11.4% → −0.035%).
+- **Implication:** this is P2 generalised — *deeper* prediction fits noise at short lags, *longer*
+  prediction fits noise at long lags, and P5-ext showed context-splitting fits noise in the
+  parameter. **Order-4 LMS + adaptive Rice is at the temporal residual's entropy floor; the temporal
+  axis is a spent, proven-negative lever in all three of its branches.** All remaining reducible bits
+  live *between* channels. Do not re-propose long-term/periodic temporal prediction, and note that the
+  cost side is punishing too: the required residual ring buffer put `ltp` at cost 0.5288 (13.4× the
+  best) and failed `neural_ok`.
+
 ---
 
 ## Open frontier (untried levers, ranked by expected payoff/cost)
+
+_**2026-07-28 (cycle 13 RESULT — refreshed ranking; this list supersedes the one below).** Three
+distinct candidates, all unanimous-PROMOTE-verified, **none promoted**, **two RETIRED**. What the
+real data spent: **frontier #2 (temporal residual entropy) is now CLOSED NEGATIVE in its last
+branch** — long-lag/periodic prediction contributes exactly 0 (`ltp`, P6), joining the
+regime/context-switched branch the sibling PRs already retired; the temporal axis is finished.
+**Global channel-topology search is closed negative** (`xtree`, P1c) — a lever nobody had ranked, now
+settled. And one **genuinely new mechanism was discovered by ablation rather than proposed**:
+`xstfir`'s win is not its delay FIR but its **opposite-side neighbour tap at lag 1**, unlocked by
+**time-major coding order** (P1d) — the first mechanism to add gain on the *low*-ρ(0) array where P1
+says spatial gain is scarce. The live frontier is now narrow and concrete._
+
+1. **Bits-selected far-side second parent under a joint solve** (P1d + P1b + P1c — the fusion of all
+   three proven parts). `xstfir` proved the far-side neighbour `x_q[n−1]` carries real, raster-unreachable
+   MI (+1.56% OTB, +1.08% CapgMyo isolated) but wasted it by paying −2.86% for the useless parent-lag
+   taps and by fixing the far-side channel geometrically. Knob: keep the **time-major** order, drop the
+   parent lag taps entirely, and add **one** second parent chosen from {near-side lag-0 candidates,
+   far-side lag-1 candidates} by the **`_bp_score` Rice-bits criterion** (P1c — select on bits, over few
+   candidates, backward-adaptive → zero side-info), with both taps co-adapting in **one joint sign-sign
+   LMS** (P1b — the marginal→multiple fix). Rationale: every measured term that was positive is kept,
+   every measured term that was negative is deleted. This is the only combination whose *each component*
+   has already been measured positive on real data. **Highest-payoff live lever.** Risk: P1b says
+   selection and count are substitutes on high-ρ(0) arrays, so the win may again concentrate on CapgMyo —
+   but CapgMyo is exactly where the current best is weakest.
+2. **Scale/geometry-selected front-end dispatch** (salvage of P1-refinement + P1d). Three front-ends now
+   each own a different array regime: global CAR wins tight arrays (OTB), best-partner wins large
+   high-ρ(0) arrays (Hyser/CEMHSEY), the far-side lag-1 tap wins the low-ρ(0) array (CapgMyo). A
+   per-recording **decoder-derivable** selector (measured global-vs-local coherence and neighbour ρ(0)
+   from the first reconstructed block, zero side-info) that dispatches to the right front-end would take
+   the **max** of the three instead of a compromise. Low mechanism risk (all three stages exist and are
+   verified); payoff bounded by the per-set margins (+0.9% CapgMyo, +0.8% OTB) but it is the only lever
+   that improves **every** set at once. PR #6's `acar_sel+bestpartner` is the 2-way special case and
+   already succeeded — generalise it to 3-way including the P1d stage.
+3. **Nothing on the temporal axis; nothing on the entropy axis; nothing in global topology.** P2, P5,
+   P5-ext, P6 and P1c now close those four completely. Any future candidate must be a *spatial*
+   mechanism that either (a) reaches a channel the causal raster cannot, or (b) changes the *selection
+   criterion* to achieved bits — those are the only two things that have moved a real number since the
+   promoted best.
+
+_Superseded ranking (cycle 10/12 era), retained for history:_
 
 _2026-07-28 (before cycle 13 survey) — **process note: two unmerged sibling PRs already spent every
 item below.** `compression-cycle-2026-07-22` (PR #6) and `compression-cycle-2026-07-25` (PR #7) both
@@ -289,6 +416,41 @@ frontier is now the two *unspent combinations* of proven-working parts, plus a n
   a plain per-block adaptive k — below even plain LMS+Rice with no front-end — at ~2× cost. After LMS,
   H(e_c | neighbour energy) ≈ H(e_c) and context-splitting's model cost dominates (P5-extension). Do not
   re-propose *any* context-modeling of the Rice parameter as a ratio play, spatial or otherwise.
+- **Global channel-topology search — Chow-Liu maximum-weight spanning forest** (`LMS4+Rice+xtree`,
+  retired 2026-07-28): per-block max-weight directed spanning forest over ≤12 undirected neighbours
+  (sign-sign |cross-correlation| weights on the previous reconstructed block) with a permuted
+  topological coding order, zero side-info. Lost to the apples-to-apples control `bpa` (identical β,
+  gate, predictor; only the topology criterion differs) by −0.23…−1.04% on **all 4** real sets at
+  higher cost (0.0430 vs 0.0387), with 0.24–1.40 pp less isolated cross-channel gain — while the
+  forest was demonstrably exercised (34.8–42.2% higher-index parents, 47.7–68.7% outside the causal
+  4-neighbourhood). **Chow-Liu optimality is optimality for the *modelled* MI, not for the *achieved
+  integer-coded* residual, and its weights must be estimated from 32 causal samples over ~6C
+  candidates where max-selection is winner's-curse biased** (P1c). Do not re-propose MST /
+  clustering / permuted-order channel topology as a ratio play.
+- **Long-term (periodic / MUAP-firing-period) temporal prediction** (`LMS4+Rice+ltp`, retired
+  2026-07-28): gated backward-adaptive tap at lag T ∈ [64,200] after the order-4 LMS, zero side-info.
+  Gate-forced-off isolation on real data: the tap contributes **−0.012% / +0.003% / −0.035% /
+  +0.022%** — zero, negative on two of four — *despite firing on 1.1–11.7% of block-channels*; the
+  codec's whole edge over `LMS+Rice` is the order-8→4 change (P2). Dominated on all 4 by the
+  leaderboard best at **13.4× the cost** (0.5288, `neural_ok` NO, 912 B/ch residual ring).
+  **A surface electrode superposes many asynchronous motor units into a near-Poisson process whose
+  autocorrelation is flat away from lag 0 — periodicity that exists per-source does not exist in the
+  mixture** (P6). With P2 (short lags), P5/P5-ext (entropy engine and parameter context) and now P6
+  (long lags), **the temporal axis is completely spent**.
+- **Multi-lag prediction from the SAME spatial parent** ("fractional-delay" cross-channel FIR, the
+  `x_p[n−1]`, `x_p[n−2]` taps inside `LMS4+Rice+xstfir`): isolated on real data at **−0.20% / −2.86% /
+  −0.28% / −0.14%** — negative on all four sets. The parent's short-lag past is collinear with
+  `x_p[n]` and conditionally uninformative once order-4 has whitened the coding channel, so the taps
+  buy only sign-sign misadjustment (P1d). Do not re-propose delay-compensating cross-channel FIRs.
+  (The *codec* is kept — see below — because a different tap inside it does work.)
+- **[Kept, NOT retired — non-dominated corner, cycle 13 2026-07-28] Delay-compensated spatio-temporal
+  FIR** (`LMS4+Rice+xstfir`, cost 0.0474, zero side-info): **the highest ratio of any codec or
+  reference on CapgMyo (1.362200×, +0.87% over the leaderboard best)**, below the best on the other
+  three real sets. Its value is *not* the hypothesis it was built for: ablation shows the whole
+  positive term is the **opposite-side neighbour tap at lag 1**, legal only because the stage codes
+  **time-major** (P1d), and it pays **inversely to zero-lag neighbour correlation** — i.e. it is the
+  first mechanism that helps on the low-ρ(0) array where P1 says the pairwise lever is exhausted. Keep
+  it as the CapgMyo corner and as the source of open-frontier #1.
 - **[Kept, NOT retired — non-dominated corner] Global common-mode CAR** (`LMS+Rice+acar`): a
   low-cost Pareto point on tight arrays (OTB +14.4%, 2.089×/0.0559 — cheaper than the incumbent)
   but not on large arrays where redundancy is local (P1-refinement). Registered, not the best,

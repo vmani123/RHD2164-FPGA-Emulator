@@ -6,7 +6,14 @@ produced by the harness (`research/bench.py` + `research/search.py`), asserted
 bit-exact, and gated by `embedded_ok` — never by reasoning (non-negotiables #1,
 #2, #4). Maintained per Stage 6 of `../COMPRESSION_RESEARCH_AGENT_PROMPT.md`.
 
-_Updated: 2026-07-19 · branch `compression-cycle-2026-07-19`. **Cycle 10 (2026-07-19) promoted
+_Updated: 2026-07-28 · branch `compression-cycle-2026-07-28`. **Cycle 13 (2026-07-28) promoted NOTHING
+and RETIRED TWO** — three unanimous-PROMOTE-verified candidates (delay-compensated spatio-temporal
+cross-channel FIR, Chow-Liu spanning-forest channel topology, gated long-term MUAP-period prediction);
+none beats the current best on real data, so the leaderboard best `LMS4+Rice+xchan_bestpartner` and the
+port pick are **unchanged**. `LMS4+Rice+xtree` and `LMS4+Rice+ltp` are conclusively Pareto-dominated on
+all 4 real sets → **RETIRED** (9 codecs now retired). `LMS4+Rice+xstfir` is **kept** — it posts the
+highest ratio of any codec or reference on CapgMyo (1.3622×). See the 2026-07-28 cycle section below.
+Prior line follows. **Cycle 10 (2026-07-19) promoted
 NOTHING and retired NOTHING** — three unanimous-PROMOTE-verified candidates (two-stage
 CAR→best-partner cascade, joint 2-parent sign-LMS, backward-adaptive best-partner re-selection) all
 landed at ≤ the current best on real data and are kept as non-dominated Pareto corners; the leaderboard
@@ -311,6 +318,63 @@ promoted; all three non-dominated → none retired.** The leaderboard best is un
   best. **Port takeaway:** if the promoted best's offline-selection port caveat matters, port
   `LMS4+Rice+xchan_bestpartner_adaptive` (same ratio, zero side-info, fully on-node).
 
+## Cycle 2026-07-28 — spatio-temporal FIR, spanning-forest topology, long-term prediction — NONE promoted, TWO retired
+
+All four real sets reachable, benched at 15 000 samples (`results/cycle_bench.csv`, 102 rows, every row
+bit-exact `ok=True`); the current best `LMS4+Rice+xchan_bestpartner` reproduces its headline exactly
+(hyser 1.480384×, otb 2.161938×, capgmyo 1.350480×, cemhsey 1.955547×) — **no regression**. Three
+distinct candidates, **all double-verified PROMOTE (no splits)**; **none beats the current best on real
+data → none promoted**; **two conclusively Pareto-dominated → RETIRED**.
+
+| candidate | mechanism / axis | real (Hyser / OTB / CapgMyo / CEMHSEY) | cost | side-info | verdict |
+|---|---|---|---:|---|---|
+| `LMS4+Rice+xstfir` | 4-tap spatio-temporal cross-channel FIR (parent lags 0-2 + opposite-side neighbour at lag 1), joint sign-sign LMS, time-major | 1.4725× / 2.1087× / **1.3622×** / 1.9503× | 0.0474 | **zero** | **kept** — non-dominated CapgMyo max-ratio corner |
+| `LMS4+Rice+xtree` | Chow-Liu max-weight spanning-forest channel topology + topological coding order | 1.4617× / 2.1346× / 1.3497× / 1.9457× | 0.0430 | **zero** | **RETIRED** — dominated on all 4 |
+| `LMS4+Rice+ltp` | gated long-term (MUAP firing-period) residual tap, lag T ∈ [64,200] | 1.3319× / 1.8347× / 1.3331× / 1.7284× | 0.5288 | **zero** | **RETIRED** — dominated on all 4, `neural_ok` NO |
+
+- **`xstfir` (KEPT — and the cycle's only positive result).** Loses the primary Hyser (−0.53%), OTB
+  (−2.46%) and CEMHSEY (−0.27%), but **wins CapgMyo +0.87% at 1.362200× — the highest ratio of any
+  codec or offline reference on that set** (next: `bpa` 1.352866×, lzma 1.173168×). An **in-memory tap
+  ablation on the real arrays** (everything else byte-identical) shows the hypothesis was wrong about
+  *which* tap works: the parent's own lags 1,2 — the "fractional-delay FIR" — are **negative on all
+  four sets** (−0.20% hyser, **−2.86% otb**, −0.28% capgmyo, −0.14% cemhsey), while the
+  **opposite-side neighbour tap `x_q[n−1]` is the entire positive term** (+0.07% / **+1.56%** /
+  **+1.08%** / −0.08%). *Theory:* the parent's short-lag past is collinear with `x_p[n]` and
+  conditionally uninformative once order-4 has whitened the coding channel, so those taps buy only
+  sign-sign misadjustment; `x_q[n−1]` is a **different channel**, a genuinely new MI slice, readable
+  only because the stage codes **time-major** — and its payoff scales *inversely* with zero-lag
+  neighbour correlation, which is why it lands on CapgMyo (|corr| ≈ 0.29). **Non-dominated → kept**
+  (INSIGHTS P1d, `experiments/012_lms4_rice_xstfir.md`).
+- **`xtree` (RETIRED).** The apples-to-apples control is `LMS4+Rice+xchan_bestpartner_adaptive` —
+  identical order-4 LMS, integer-LS β, Rice-bits keep/drop gate, previous-block backward derivation and
+  zero side-info; **only the topology criterion differs**. `xtree` loses on all four (−1.04% hyser,
+  −0.86% otb, −0.23% capgmyo, −0.42% cemhsey) at higher cost (0.0430 vs 0.0387), with 0.24–1.40 pp
+  less isolated cross-channel gain — and it was *genuinely exercised*: 34.8–42.2% of chosen parents
+  have a **higher** grid index and 47.7–68.7% lie **outside** the causal 4-neighbourhood. *Theory:*
+  Chow-Liu maximises modelled MI, not achieved integer-coded bits, and cannot fall back to a
+  second-best edge; and its weights come from 32 causal samples over ~6C candidates, where the max is
+  winner's-curse biased toward long/weak edges. **Conclusively dominated by three registered codecs →
+  RETIRED** (P1c, `experiments/013_lms4_rice_xtree.md`).
+- **`ltp` (RETIRED).** Gate-forced-off isolation on real data gives the tap's exact contribution:
+  **−0.012% (hyser), +0.003% (otb), −0.035% (capgmyo), +0.022% (cemhsey)** — zero, and negative on two
+  of four — **despite the gate firing on 1.1–11.7% of block-channels**. The codec's whole +0.07…+0.51%
+  edge over `LMS+Rice` is the order-8→4 predictor change (P2). *Theory:* a surface electrode superposes
+  many asynchronously firing motor units into a near-Poisson process whose autocorrelation is flat away
+  from lag 0 — the per-source periodicity does not survive the mixture, so the 3/8 gate is crossed
+  mostly by estimator noise. Dominated on all 4 by the leaderboard best at **13.4× the cost** (0.5288),
+  `neural_ok` NO → **RETIRED** (P6, `experiments/014_lms4_rice_ltp.md`).
+- **Sanity:** max real ratio in the run **2.1795×** (`acar+bestpartner`, OTB) ≪ the 6× leak ceiling;
+  all 102 CSV rows bit-exact (`ok=True`), no FAIL; every codec `embedded_ok`, `neural_ok` for all but
+  `ltp` (correctly flagged `-`). `results/cycle_search.csv` reconfirms the port pick
+  **`lms4s7+x6/b512` 1.8204× / cost 0.027 / neural_ok**, cross on→off worth **+14.83%** vs order 4→8's
+  +0.79% — unchanged. Only `research/registry.py` (two retire flags, no codec logic), the report files
+  and `SURVEY.md` touched; `rtl/`, `sim/` untouched.
+- **Net:** the temporal axis is now closed in all three branches (P2 short-lag, P5/P5-ext entropy
+  engine + parameter context, **P6 long-lag**), and global channel-topology search is closed (P1c). The
+  one genuinely new mechanism this cycle produced was found by ablation, not by hypothesis: **time-major
+  coding order unlocks an opposite-side neighbour that raster order cannot reach, and it pays where
+  zero-lag correlation is weakest** (P1d).
+
 ## Best embeddable after search (real Hyser)
 
 `research/search.py` on `hyser_1dof_f1_s1` (15 000 samples, `results/06_search_hyser.csv`):
@@ -393,6 +457,14 @@ by each set's real neighbour correlation, consistent with the sweep.
   2-parent predictor (cost 0.0366, zero side-info) is an even cheaper near-tie that *wins*
   the primary Hyser (1.4930×) but regresses on OTB/CEMHSEY — a strong value alternative,
   not a strict ratio win. **The headline best-ratio codec stays `LMS4+Rice+xchan_bestpartner`.**
+- **2026-07-28 update (cycle 13) — the port pick and the headline best are UNCHANGED.** None of the
+  three candidates displaces them: `xtree` and `ltp` are dominated on all four real sets (RETIRED), and
+  `xstfir` loses the primary Hyser (−0.53%). One caveat worth carrying to the port: **on CapgMyo — the
+  low-neighbour-correlation array — `LMS4+Rice+xstfir` (1.3622×, cost 0.0474, zero side-info,
+  look-ahead 0) is now the best embeddable by +0.87%**, because its opposite-side lag-1 neighbour tap
+  reaches MI the raster order cannot (P1d). If a deployment's array is differential / band-pass
+  filtered / low-|corr| like CapgMyo, that is the codec to port; on every high-|corr| array the
+  headline pick still wins.
 
 ## Status vs. the 6-stage plan
 
