@@ -212,6 +212,21 @@ is not. Every novel design faces the same bars: lossless + bit-exact, `embedded_
 
 ## Open frontier (untried levers, ranked by expected payoff/cost)
 
+_2026-07-28 (before cycle 13 survey) — **process note: two unmerged sibling PRs already spent every
+item below.** `compression-cycle-2026-07-22` (PR #6) and `compression-cycle-2026-07-25` (PR #7) both
+branched from the same `compression-wip` commit this branch also starts from, ran independently, and
+between them already tried: frontier #1 (best-partner selection fused with joint2, tried TWICE —
+PR #6 `xchan_jointbp2` +1.12% Hyser, PR #7 `xchan_joint2_bpa` +1.03% Hyser, both regress OTB/CEMHSEY,
+confirms selection+count take the max not the sum); frontier #2 (temporal residual floor via
+regime/context-switched predictors, tried TWICE, both RETIRED — PR #6 `xchan_bestpartner` regime bank,
+PR #7 K=2 regime bank — conditioning the predictor coefficients fits noise once order-4 has whitened
+the residual, same failure as the retired `xctx` moved upstream); frontier #3 (scale-selected cascade,
+tried ONCE, PR #6 `acar_sel+bestpartner` — succeeded, Pareto-dominates the always-on cascade, pending
+merge). PR #7 additionally retired a fourth mechanism not listed below: residual/innovation-domain
+cross-channel subtract (`xres`) — worse-conditioned regressor than the raw-domain pair. **Cycle 13
+must find genuinely new mechanisms beyond all four of these**, not variations on them. See `SURVEY.md`'s
+2026-07-28 process note for full detail; these two PRs' file edits are not yet merged onto this branch._
+
 _2026-07-19 (cycle 10): **all three of last cycle's ranked frontier levers were spent this cycle**, and
 none produced a new best — the leaderboard best `LMS4+Rice+xchan_bestpartner` stands. #1 (two-stage
 CAR→best-partner cascade, `acar+bestpartner`) helped **only on the tight OTB array** (+0.81%) and was
