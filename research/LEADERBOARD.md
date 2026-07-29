@@ -6,22 +6,23 @@ produced by the harness (`research/bench.py` + `research/search.py`), asserted
 bit-exact, and gated by `embedded_ok` — never by reasoning (non-negotiables #1,
 #2, #4). Maintained per Stage 6 of `../COMPRESSION_RESEARCH_AGENT_PROMPT.md`.
 
-_Updated: 2026-07-19 · branch `compression-cycle-2026-07-19`. **Cycle 10 (2026-07-19) promoted
-NOTHING and retired NOTHING** — three unanimous-PROMOTE-verified candidates (two-stage
-CAR→best-partner cascade, joint 2-parent sign-LMS, backward-adaptive best-partner re-selection) all
-landed at ≤ the current best on real data and are kept as non-dominated Pareto corners; the leaderboard
-best `LMS4+Rice+xchan_bestpartner` is unchanged (see the 2026-07-19 cycle section below). Notably,
-`LMS4+Rice+xchan_bestpartner_adaptive` **closes the promoted best's offline-selection port caveat** at
-~zero ratio cost (zero side-info). Prior line — branch `compression-cycle-2026-07-16`. Cycles 1 & 2
-(2026-07-08, 2026-07-10) merged. **Cycle 7 PROMOTED a new best: `LMS4+Rice+xchan_bestpartner`**
-(order-4 predictor under the best-partner front-end) — beats the prior incumbent on all
-4 real sets at lower cost, unanimous PROMOTE. Seven codecs are now `retired=True` in
-`research/registry.py` (conclusively Pareto-dominated — kept, bit-exact, excluded from the
-default `bench.py` sweep and this table's headline rows; `--include-retired` re-checks on
-demand): `xchan_adaptive`, `xchan_bestpartner` (order-8, dominated by its order-4 sibling
-this cycle), `iklt`, `iklt_adaptive`, `xchan_tans`, `xchan_multiparent`, `xctx`. The loop
-targets 2-3 genuinely distinct candidates per cycle; retirement is how dominated ones stop
-being re-benchmarked every time without deleting them._
+_Updated: 2026-07-22 · branch `compression-cycle-2026-07-22`. **Cycle 12 (2026-07-22) promoted
+NOTHING and retired TWO** — three unanimous-PROMOTE-verified candidates (best-pair-selection ⊕ joint
+2-tap LMS, regime-switched predictor bank, scale-selected CAR cascade) all landed at ≤ the current best
+on real data; the leaderboard best `LMS4+Rice+xchan_bestpartner` is unchanged (see the 2026-07-22 cycle
+section below). `LMS4+Rice+xchan_jointbp2` won the primary Hyser (+1.12%, highest embeddable Hyser ratio)
+but regressed OTB/CEMHSEY → kept as non-dominated max-Hyser corner, not promoted. `LMS4rs+Rice+xchan_bestpartner`
+(regime-switched temporal bank) lost on all 4 real sets at higher cost → **RETIRED**. `LMS4+Rice+acar_sel+bestpartner`
+(scale gate) kept the OTB corner without the large-array loss → conclusively supersedes the always-on
+`LMS4+Rice+acar+bestpartner` at equal cost → the always-on cascade is **RETIRED**. Prior line — cycle 10
+(2026-07-19) promoted/retired nothing; cycle 7 PROMOTED the current best `LMS4+Rice+xchan_bestpartner`
+(order-4 predictor under the best-partner front-end). **Nine codecs are now `retired=True` in
+`research/registry.py`** (conclusively Pareto-dominated — kept, bit-exact, excluded from the default
+`bench.py` sweep and this table's headline rows; `--include-retired` re-checks on demand):
+`xchan_adaptive`, `xchan_bestpartner` (order-8), `iklt`, `iklt_adaptive`, `xchan_tans`, `xchan_multiparent`,
+`xctx`, `LMS4rs+Rice+xchan_bestpartner` (this cycle), `LMS4+Rice+acar+bestpartner` (this cycle, superseded by
+its scale-selected version). The loop targets 2-3 genuinely distinct candidates per cycle; retirement is how
+dominated ones stop being re-benchmarked every time without deleting them._
 
 ## Headline (REAL data decides — #3)
 
@@ -310,6 +311,55 @@ promoted; all three non-dominated → none retired.** The leaderboard best is un
   ceiling; three distinct attempts to exceed it (wider basis, more parents, cheaper estimation) all landed at ≤ the
   best. **Port takeaway:** if the promoted best's offline-selection port caveat matters, port
   `LMS4+Rice+xchan_bestpartner_adaptive` (same ratio, zero side-info, fully on-node).
+
+## Cycle 2026-07-22 — best-pair⊕joint, regime-switched bank, scale-selected cascade — NONE promoted, TWO retired
+
+All four real sets reachable, benched at 15 000 samples (`results/cycle_bench.csv`); the current best
+`LMS4+Rice+xchan_bestpartner` reproduces its headline exactly (Hyser 1.4804×, OTB 2.1619×). Three distinct
+candidates, **all double-verified PROMOTE (no splits)**; **none beats the current best on real data → none
+promoted; two conclusively Pareto-dominated → two retired.** The leaderboard best is unchanged.
+
+| candidate | mechanism / axis | real (Hyser / OTB / CapgMyo / CEMHSEY) | cost | verdict |
+|---|---|---|---:|---|
+| `LMS4+Rice+xchan_jointbp2` | best-PAIR selection ⊕ joint 2-tap adaptive sign-LMS (spatial: selection+count STACK) | **1.4969×** / 2.1522× / 1.3503× / 1.9523× | 0.0468 | **kept** — non-dominated max-Hyser corner |
+| `LMS4rs+Rice+xchan_bestpartner` | regime-switched (activity-gated) order-4 predictor bank (temporal residual entropy) | 1.4760× / 2.1264× / 1.3401× / 1.9538× | 0.0524 | **RETIRED** — dominated on all 4 |
+| `LMS4+Rice+acar_sel+bestpartner` | scale-selected CAR→best-partner cascade (per-recording meta-gate on channel count) | 1.4804× / **2.1795×** / 1.3505× / 1.9555× | 0.043 | **kept** — non-dominated OTB corner; supersedes always-on cascade |
+
+- **`jointbp2` (frontier #1, the one untried STACK — spent, works but not a global best).** Selecting the best
+  *pair* of causal neighbours (backward, zero side-info) then predicting from it with one joint 2-tap sign-sign
+  LMS. It **recovers the highest cross-channel gain of any codec on Hyser (+12.55%** vs temporal `LMS+Rice`,
+  above `joint2`'s +12.26% and best-partner's +11.31%): selection+count genuinely *stack* on the diffuse-local
+  large array, exactly as frontier #1 predicted. **But on the tight 64-ch OTB it is +17.91%, still below
+  best-partner's single selected neighbour (+18.44%)** — a jointly-solved second parent adds less than one
+  dominant diagonal neighbour, and selecting the pair does not rescue it. Net: wins primary Hyser (+1.12%, the
+  highest embeddable Hyser ratio measured), loses OTB (−0.45%) and CEMHSEY (−0.17%), ≈neutral CapgMyo → does not
+  robustly beat the best. Highest-ratio-on-Hyser → non-dominated → kept; not promoted (one-set win, two-set
+  regressions, same disposition as `joint2`).
+- **`LMS4rs` (frontier #2, temporal residual entropy — spent NEGATIVE → RETIRED).** A 3-way activity-regime bank
+  of order-4 sign-LMS predictors *lowered* the achieved cross-channel gain on **every** real set (OTB +16.49% vs
+  +18.44%, Hyser +10.98% vs +11.31%, CapgMyo +0.59% vs +1.37%, CEMHSEY +12.98% vs +13.08%) and lost on all 4 at
+  higher cost (0.0524 > 0.0394). After order-4 LMS the residual is near-white (P2); "burst" segments are
+  higher-*variance* noise not distinct linear dynamics, and splitting into 3 banks fragments each bank's
+  adaptation to ~⅓ the samples → noisier taps → higher coded bits. `H(e|regime)` did **not** drop below `H(e)`.
+  Conclusively dominated → RETIRED. The predictor-side analogue of the retired `xctx` context-modeling failure.
+- **`acar_sel` (frontier #3, scale-selected cascade — spent POSITIVE as engineering → RETIRES the always-on
+  version).** A per-recording meta-gate on array channel count `C` (header-read, zero circularity, zero
+  side-info): `C≤64` → full CAR→best-partner cascade, `C≥128` → best-partner only. It reproduces the always-on
+  cascade's OTB max-ratio corner **exactly (2.1795×, +0.81% over best-partner)** while equalling the plain best
+  **exactly on all 3 large arrays** — recovering the −0.34/−0.40 pp large-array ratio the always-on cascade had
+  *lost*. It **Pareto-dominates `LMS4+Rice+acar+bestpartner` at equal cost 0.043** (≥ ratio everywhere, > on
+  Hyser+CEMHSEY) → that always-on codec is **RETIRED (superseded)**. Versus the leaderboard best, acar_sel weakly
+  dominates on ratio (≥ all, > OTB) but at higher cost (0.043 > 0.0394) and ties the primary Hyser → not a Pareto
+  win, not promoted; kept as the non-dominated OTB corner.
+- **Sanity:** max real ratio 2.1795× (acar_sel/OTB) ≪ 6× ceiling; every row bit-exact (`ok=True`), all
+  `embedded_ok`/`neural_ok`; no incumbent/best regression (best reproduces its registered ratios exactly). Only
+  `research/registry.py` (two retire flags — codec encode/decode logic untouched), report files, and `SURVEY.md`
+  touched; `rtl/`/`sim/` untouched.
+- **Net:** the single-parent rank-1 subtract on order-4 (`LMS4+Rice+xchan_bestpartner`) remains the proven ratio
+  ceiling. Frontier #1 (selection⊕count stack) is now spent — it works on large arrays but does not clear the best
+  on tight arrays; frontier #2 (temporal residual entropy via regime switching) is spent negative; frontier #3
+  (scale-selected cascade) is spent positive as an engineering result (clean OTB corner) but yields no new best.
+  Headline/port pick unchanged.
 
 ## Best embeddable after search (real Hyser)
 
