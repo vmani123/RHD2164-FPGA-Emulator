@@ -94,6 +94,25 @@ is not. Every novel design faces the same bars: lossless + bit-exact, `embedded_
   variable — a zero-side-info meta-decision recovers the best of both regimes. This is the general pattern for every
   geometry-dependent lever here (and the concrete realization of the scale-matched front-end frontier). It is an engineering
   win (clean corner), not a new ratio ceiling: it ties the best on the primary Hyser at higher cost, so it is not a promotion.
+- **Refinement (2026-07-31, `LMS4+Rice+xchan_scalesel` — the frontier-#1 scale-gated front-end, KEPT, NOT promoted).
+  The gate mechanism is now proven twice over; what it exposed is that CHANNEL COUNT is a LEAKY proxy for spatial rank.**
+  Gating the two measured per-scale winners on the header-read `C` (`C≤64` → single selected best-partner, `C≥128` →
+  jointly-solved selected best pair) reproduced each branch's ratio **exactly** on real data (OTB 2.161938 = best-partner
+  to 6 dp; Hyser 1.496924 / CapgMyo 1.350287 / CEMHSEY 1.952260 = `jointbp2` to 6 dp) — so a zero-side-info structural gate
+  is a *lossless* composition device, confirmed on a second, entirely different pair of branches. It delivers the highest
+  embeddable Hyser ratio (**+1.117%** over the best) **and** ties the best on OTB — the first codec holding both corners —
+  yet still **regresses CapgMyo (−0.014%) and CEMHSEY (−0.168%)** at +20% cost, so it is not a promotion. **Theory:** the
+  gate can only be as good as the structural variable it keys on. Cycle 13 inferred "large arrays → jointbp2" from the
+  128-ch Hyser alone; the 320-ch CEMHSEY (a 5×64 *strip* — geometrically near-1-D, so its local pairwise MI is effectively
+  rank-1 like a tight array) and the 128-ch CapgMyo (differential/band-passed, almost no lag-0 local structure at all)
+  falsify that inference: **both are "large" by `C` and neither is rank≥2-local.** `C` is a proxy for array *size*, but the
+  quantity that decides whether a second spatial DOF pays is the local covariance's **effective rank**, which depends on
+  geometry (2-D patch vs 1-D strip), pitch, and the acquisition front-end (monopolar vs differential). **Implication for
+  every future gate: key it on a decoder-observable statistic that *measures* the deciding property (e.g. the ratio of the
+  best-partner residual energy to the best-pair residual energy over the previous reconstructed block, or the grid aspect
+  ratio), not on a demographic stand-in like channel count.** Frontier #1 is spent as posed: the per-scale-winner gate
+  works exactly as designed and still does not clear the best on all four real sets, because one of its two branches is
+  not the per-scale winner on two of the three "large" arrays.
 
 ### P1b — A JOINT (co-adaptive) 2-parent solve recovers a second parent's MI where the summed marginal one could not — but *parent selection* and *parent count* are substitutes, not complements, and which wins is set by array geometry.
 - **Evidence (2026-07-19, `LMS+Rice+xchan_joint2` — KEPT, cost-dominant, NOT promoted).** One joint backward-adaptive
@@ -132,6 +151,39 @@ is not. Every novel design faces the same bars: lossless + bit-exact, `embedded_
   it does not (tight arrays) — so it raises the large-array ratio ceiling but is not a single codec that beats the best on
   *both* scales at once.** The per-scale winner is now known: single selected partner on tight arrays, jointly-solved best
   pair on large arrays — which is exactly what a *scale-selected spatial front-end* (cf. P1-refinement `acar_sel`) would gate.
+
+### P1c — Cross-channel MI is a function of **LAG**, not just of *which/how many* neighbours; the lag-0 restriction every codec shared hides a real slice of it, and that slice is largest exactly where lag-0 correlation is *weakest*.
+- **Evidence (2026-07-31, `LMS4+Rice+xchan_lagbp` — KEPT, non-dominated, NOT promoted).** Adding an integer
+  lag `d ∈ {−4..+4}` to the backward best-partner search (the min-bits `(p*,d*)` then driving one joint 2-tap
+  co-adaptive sign-LMS on the *same* parent at two lags — a strict superset of the promoted best, `d*=0`
+  degenerating to it exactly) produced, on real data: **CapgMyo 1.362255× — the highest CapgMyo ratio any
+  codec has measured here** (best-partner 1.350480, `bpa` 1.352866, WavPack 1.35), with the isolated
+  cross-channel gain nearly doubled, **+2.25% vs +1.37%**; CEMHSEY marginally best (1.955829 vs 1.955547);
+  but Hyser −0.113% (+11.18% vs +11.31% gain) and **OTB −1.754% (+16.36% vs +18.44%)**, at the highest cost
+  of any registered codec (0.0677).
+- **Theory:** the pairwise cross-covariance of an electrode array is `R_cp(τ)`, peaking at the MUAP
+  propagation delay `τ* = IED/CV` (≈2–3.3 ms ≈ 4–7 samples at 2048 Hz). All 20 prior codecs evaluated
+  `R_cp(0)` only, so they could exploit only *transverse* (non-propagating) pairs; for along-fibre pairs
+  `I(x_c[n]; x_p[n−τ*]) ≫ I(x_c[n]; x_p[n])`. **A low `R_cp(0)` therefore does not mean "no spatial MI" — it
+  can mean "the MI moved to τ≠0".** CapgMyo, the harness's negative control (|corr|≈0.29 at lag 0, band-pass
+  differential 8×16 array), is precisely that case, and it is the only set where the lag lever paid: the
+  differential/high-pass front-end that kills the instantaneous common mode leaves the *propagating* component
+  intact and phase-shifted. **P1's "the ceiling is real where neighbour correlation is low" is hereby amended:
+  the ceiling is set by `max_τ I(x_c[n]; x_p[n−τ])`, not by `I` at lag 0.**
+- **Why it *loses* on tight arrays:** the lag axis is a discrete selector over 9× more options fit on the
+  previous block. Where one transverse neighbour already carries a large `R(0)` (OTB), there is no delayed MI
+  to find, so the extra DOF only contributes model-selection variance (a spuriously-best lag in the estimation
+  block carried into the coding block) plus the second adaptive tap's estimation noise — the *same* failure
+  shape P1b recorded for a second *channel* on tight arrays. **A second spatial degree of freedom — whether
+  spent on count (P1b) or on lag (here) — pays only where the array geometry leaves incremental MI for it,
+  and costs variance where it does not.** The two DOFs differ in *which* geometry favours them: count pays on
+  large diffuse arrays, lag pays on arrays whose instantaneous coupling has been removed.
+- **Implication (live lever, not spent):** the lag axis is proven to carry real MI, but as an *always-on*
+  global search it is too expensive (0.0677) and too variance-prone on tight arrays. The principled next form
+  is the P1-refinement gating pattern applied to *lag*: enable/limit the lag search on a decoder-observable
+  statistic of the array (e.g. measured lag-0 neighbour correlation from the previous reconstructed block, or
+  re-search `τ*` only every k-th block since it is a physiological constant within a recording) so the cost
+  and the variance are paid only where the delayed slice exists.
 
 ### P2 — Temporal prediction saturates early; deeper prediction *hurts* on real data.
 - **Evidence:** order-4 LMS beats order-8 on both Hyser and OTB (order 4→8 *costs* ratio in
@@ -253,6 +305,33 @@ is not. Every novel design faces the same bars: lossless + bit-exact, `embedded_
   spent lever too, for the same reason the engine swap is: Rice already sits at the floor and there is
   no sub-Golomb fraction to amortize the model cost.
 
+### P6 — Operator ORDER is a first-class design variable: decorrelate ACROSS CHANNELS first, whiten IN TIME second. The residual domain is the wrong place to do spatial prediction.
+- **Evidence (2026-07-31, `LMS4+Rice+rxchan_bp` — RETIRED).** The MPEG-4 ALS / Choi-style order swap — run
+  the order-4 sign-LMS on each *unmodified raw* channel, then code `e_c − (β·e_p)>>s` with (partner, β)
+  selected by the Rice bits of that actually-coded quantity — lost on **all 4** real sets against its
+  raw-domain twin `LMS4+Rice+xchan_bestpartner_adaptive` at **exactly equal cost 0.0387** (otb 2.0975× vs
+  2.1531×, hyser 1.4686× vs 1.4770×, cemhsey 1.9407× vs 1.9539×, capgmyo 1.3500× vs 1.3529×) and against the
+  leaderboard best on all 4. Isolated cross-channel gain fell to **~80–85% of raw-domain everywhere**: otb
+  +14.91% (vs +18.44%), hyser +10.42% (vs +11.31%), cemhsey +12.23% (vs +13.08%), capgmyo +1.33% (vs +1.37%).
+- **Theory:** the two operators do **not** commute (`P_c(x_c − βx_p) ≠ P_c(x_c) − βP_p(x_p)` when the channels'
+  adaptive filters differ), and the non-commutation runs *against* the coder. Temporal whitening removes
+  exactly the predictable, low-frequency, **shared** structure that the spatial subtract feeds on; after each
+  channel is whitened by its *own* `P`, what is left approximates that channel's innovation process, and two
+  innovation processes retain only the high-pass-weighted remnant `P_c(ω)P_p*(ω)S_cp(ω)` of the original
+  cross-spectrum. The spatial stage arrives to find most of the mutual information already consumed —
+  **whitening is MI-destroying for the *subsequent* stage even though it is rate-reducing for its own.**
+  Aligning the (partner, β) estimator with the true rate objective (the stated motivation, and a genuine
+  improvement in estimator/objective consistency) cannot compensate for estimating a quantity that is no
+  longer there. The correct pipeline order is therefore the shipped one: **remove the inter-channel
+  redundancy while the shared source is still present in the signal, then whiten what remains.**
+- **Implication:** do not re-propose residual-domain (post-predictor) cross-channel prediction as a ratio
+  play, and treat "the cited reference does it in the residual domain" as insufficient justification — this
+  harness has now measured the two orders head-to-head at equal cost and the raw-domain order wins on every
+  real set. More generally: when stacking a decorrelating stage and a whitening stage, order them so each
+  stage still *has* the structure it is designed to remove. (Corollary for the *estimator*: the shipped
+  raw-domain scoring proxy is measurably good enough — the objective/rate mismatch P4/P5 might have predicted
+  is worth far less than the MI the reordering destroys.)
+
 ---
 
 ## Open frontier (untried levers, ranked by expected payoff/cost)
@@ -270,27 +349,44 @@ ratio ceiling set by array geometry: single selected partner wins tight arrays, 
 arrays. No single FIXED spatial front-end beats the best on both scales — but a SCALE-SELECTED one might, now that both
 per-scale winners are known.** The live frontier:_
 
-1. **Scale-select the spatial front-end between the two proven per-scale winners** (P1b-refinement ⊕ the `acar_sel`
-   gating pattern, P1-refinement). This cycle nailed the per-scale optimum empirically: on tight arrays (`C<=64`) the
-   single *selected* best-partner wins; on large arrays (`C>=128`) the jointly-solved best-*pair* (`jointbp2`) wins
-   (+12.55% Hyser, the highest measured, +1.12% ratio over the best). Neither fixed front-end beats the best on both
-   scales, but `acar_sel` proved a **zero-side-info, header-read channel-count gate** cleanly picks the right regime per
-   recording. Gate best-partner (C<=64) vs jointbp2 (C>=128): the tight-array corner stays best-partner's, the
-   large-array ratio inherits jointbp2's max-Hyser win — the first construction that could clear the best on the primary
-   Hyser *and* hold the tight-array OTB corner. **Highest-payoff live lever, lowest mechanism risk** (both branches AND
-   the gate were verified this cycle). Risk: the large-array Hyser win is only +1.12% and costlier (0.0468); measure the
-   full 4-set profile of the gated codec directly against the best before claiming a promotion.
-2. **Attack the residual entropy floor by changing the predictor's FUNCTIONAL FORM, not its coefficient count** (P2/P5,
-   re-scoped after `LMS4rs`). Multiplying linear coefficient sets (regime bank) is now dead — it fits noise once the
-   residual is white. The only remaining temporal lever is a genuinely *non-linear* predictor (still order <=4) whose
-   residual is *not* a linear function of the history — e.g. a small sign-of-neighbour or gated-magnitude nonlinearity
-   capturing higher-order structure a linear LMS provably cannot. Rationale: a linear LMS residual is white *to second
-   order*; any remaining compressibility is higher-order. Medium payoff, genuinely different axis, higher mechanism risk.
-   Pursue only if #1 does not clear the best.
-3. **Backward-adaptive pair-selection guarantee for #1's large-array branch** (P4-refinement, folds into #1). `jointbp2`
-   already selects the pair per block at zero side-info; if #1's gated codec is promoted, confirm the large-array branch's
-   per-block pair re-selection holds the offline ratio (à la `bpa`) so the whole gated codec is streaming-legal. An
-   embeddability guarantee, not a ratio play — low standalone payoff.
+_**Refreshed 2026-07-31 (cycle 16).** Frontier #1 (scale-selected front-end) is **spent as posed**: `scalesel` gated the two
+per-scale winners on the header-read `C`, reproduced each branch's real-data ratio exactly, took the max-Hyser corner
+(+1.117%) AND tied the best on OTB — and still regressed CapgMyo/CEMHSEY at +20% cost, because `C` is a **leaky proxy for
+spatial rank** (P1-refinement 2026-07-31). Two brand-new axes were opened and measured: **lag** (`lagbp` — the first codec to
+beat the best on CapgMyo, +0.87%, by nearly doubling its cross-channel gain; new **P1c**) and **operator order** (`rxchan_bp`
+— residual-domain spatial prediction lost on all 4 at equal cost and is RETIRED; new **P6**). Net: the leaderboard best
+`LMS4+Rice+xchan_bestpartner` still stands, but the ceiling story has changed — it is no longer "spatial MI is exhausted",
+it is "spatial MI at lag 0 is exhausted". The live frontier:_
+
+1. **GATE the lag lever on a measured statistic instead of running it always** (P1c ⊕ the gating pattern of
+   P1-refinement). `lagbp` proved the lag axis carries real, previously-unavailable MI (CapgMyo 1.362255× — the highest
+   ever measured here, +2.25% xchan gain vs the best's +1.37%) but pays selection variance where lag-0 already
+   dominates (OTB −1.75%) and costs 0.0677 always-on. Fix both with one construction: from the *previous reconstructed
+   block*, compare the best lag-0 partner's Rice-bit score against the best lagged one and enable the lag axis only when
+   the delayed option wins by a margin (equivalently: freeze `d*` for k blocks — `τ*` is a physiological constant within
+   a recording — and/or cap `D≤2`). This is zero side-info, cuts the search term by ~k, and by construction can only
+   *add* to best-partner (`d*=0` is the fallback). **Highest expected payoff: it is the only lever that has produced a
+   real-data win over the best on a set the harness had written off as physically empty.** Risk: the margin gate is
+   another discrete selector — it must be validated to not fire spuriously on OTB.
+2. **Re-key the spatial-rank gate on a MEASURED rank statistic, not on channel count** (P1-refinement 2026-07-31).
+   `scalesel` showed the gate mechanism is lossless and that the branches are right *per rank regime*, but that CEMHSEY
+   (5×64 strip) and CapgMyo (differential) are rank-1-like despite being "large". Replace `C` with a decoder-derivable
+   measurement from the previous reconstructed block — e.g. the ratio of best-*pair* to best-*partner* residual energy
+   (or Rice-bit score), thresholded per recording, or a grid-aspect-ratio term. Expected profile: Hyser keeps
+   `jointbp2`'s +1.117%, OTB/CEMHSEY/CapgMyo fall back to best-partner exactly → the first candidate that could be
+   ≥ the best on **all four** real sets. Cost stays ≈0.047, so it would be a non-dominated corner, not a Pareto
+   domination — promote only if it is ≥ best everywhere and > on the primary.
+3. **Attack the residual entropy floor by changing the predictor's FUNCTIONAL FORM, not its coefficient count** (P2/P5,
+   re-scoped after `LMS4rs`; unchanged in rank-order but now below the two spatial items above). Multiplying linear
+   coefficient sets is dead — it fits noise once the residual is white. The only remaining temporal lever is a genuinely
+   *non-linear* predictor (still order ≤4) whose residual is not a linear function of the history — e.g. a small
+   sign-of-neighbour or gated-magnitude nonlinearity. Rationale: a linear LMS residual is white *to second order*; any
+   remaining compressibility is higher-order. Medium payoff, higher mechanism risk. Note P6 constrains where such a
+   stage may sit: it must not be placed ahead of the spatial subtract.
+4. **(Folded, low standalone payoff) Backward-adaptive pair-selection guarantee for any gated large-array branch**
+   (P4-refinement). `jointbp2` already selects its pair per block at zero side-info, so #2's large branch is already
+   streaming-legal; only the tight branch's offline best-partner selection carries the old port caveat, and
+   `bestpartner_adaptive` is the drop-in that closes it. An embeddability guarantee, not a ratio play.
 
 ## Dead ends (retired — do NOT re-propose as new; a genuinely different variant must say why)
 
@@ -332,6 +428,16 @@ per-scale winners are known.** The live frontier:_
   −0.34/−0.40 pp large-array regression (Hyser/CEMHSEY) — Pareto-dominated at equal cost. The mechanism is not dead
   (the *scale-gated* form is kept, below); the always-on form is simply obsolete. Always GATE a geometry-dependent
   lever on a decoder-observable structural variable rather than run it unconditionally (P1-refinement).
+- **Residual-domain (post-predictor) cross-channel prediction** (`LMS4+Rice+rxchan_bp`, retired 2026-07-31): the
+  MPEG-4 ALS / Choi operator-order swap — order-4 LMS on raw channels, then a backward best-partner rank-1 subtract
+  between the two *residuals*, selected by the Rice bits of the actually-coded quantity. Lost on **all 4** real sets
+  against its raw-domain twin `bestpartner_adaptive` at **equal cost 0.0387** (otb 2.0975× vs 2.1531×, hyser 1.4686× vs
+  1.4770×, cemhsey 1.9407× vs 1.9539×, capgmyo 1.3500× vs 1.3529×) and against the best on all 4; isolated xchan gain
+  fell to ~80–85% of raw-domain (otb +14.91% vs +18.44%). Each channel's independently-adapted whitening filter removes
+  the shared low-frequency structure the spatial tap lives on, so the residuals' cross-spectrum is a high-pass-weighted
+  remnant of the raw one — whitening is MI-destroying for the *following* stage (P6). **Do not re-propose residual-domain
+  spatial prediction as a ratio play; "the cited paper does it that way" is not a justification — the two orders have now
+  been measured head-to-head at equal cost.**
 - **[Kept, NOT retired — non-dominated corner] Global common-mode CAR** (`LMS+Rice+acar`): a
   low-cost Pareto point on tight arrays (OTB +14.4%, 2.089×/0.0559 — cheaper than the incumbent)
   but not on large arrays where redundancy is local (P1-refinement). Registered, not the best,
@@ -360,6 +466,21 @@ per-scale winners are known.** The live frontier:_
     corner (2.1795×) with NO large-array regression (= best exactly on the 3 large arrays); ties the best on the
     primary at higher cost → not promoted. Proves the zero-side-info channel-count gate pattern (P1-refinement).
     Its existence RETIRED the always-on cascade.
+- **[Kept, NOT retired — non-dominated corners, cycle 16 2026-07-31]** Two candidates, unanimous-PROMOTE-verified,
+  neither beats the leaderboard best across real data, neither dominated:
+  - **Lag-aligned best-partner** (`LMS4+Rice+xchan_lagbp`, cost 0.0677): the **CapgMyo corner** — 1.362255×, the
+    highest CapgMyo ratio any codec has measured here, achieved by nearly doubling that array's cross-channel gain
+    (+2.25% vs +1.37%); also marginally the highest CEMHSEY (1.955829×). Loses Hyser (−0.11%) and OTB (−1.75%) at the
+    highest cost of any codec → not promoted. **Opens a genuinely new spatial axis (P1c): cross-channel MI is a
+    function of lag, and a weak lag-0 correlation can mean the MI moved to τ≠0 rather than that it is absent.** The
+    always-on global (partner × lag) search is what must be gated (frontier #1).
+  - **Scale-gated spatial front-end** (`LMS4+Rice+xchan_scalesel`, cost 0.0472): the only codec that holds **both**
+    the max-Hyser corner (1.496924×, +1.117% over the best) and the best's OTB ratio (2.161938×) at once. Each branch
+    reproduces its primitive's real-data ratio to 6 decimals → the zero-side-info structural gate is a *lossless*
+    composition device, now proven on a second pair of branches. Regresses CapgMyo (−0.014%) and CEMHSEY (−0.168%) at
+    +20% cost → not promoted. Does not dominate `jointbp2` (0.0468 < 0.0472) → both kept. **Its residual losses are the
+    evidence that `C` is a leaky proxy for spatial rank (P1-refinement 2026-07-31) — re-key the gate on a measured rank
+    statistic (frontier #2).**
 
 ## Sanity anchors
 

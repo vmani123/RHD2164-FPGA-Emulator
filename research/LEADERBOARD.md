@@ -6,22 +6,29 @@ produced by the harness (`research/bench.py` + `research/search.py`), asserted
 bit-exact, and gated by `embedded_ok` — never by reasoning (non-negotiables #1,
 #2, #4). Maintained per Stage 6 of `../COMPRESSION_RESEARCH_AGENT_PROMPT.md`.
 
-_Updated: 2026-07-22 · branch `compression-cycle-2026-07-22`. **Cycle 12 (2026-07-22) promoted
-NOTHING and retired TWO** — three unanimous-PROMOTE-verified candidates (best-pair-selection ⊕ joint
-2-tap LMS, regime-switched predictor bank, scale-selected CAR cascade) all landed at ≤ the current best
-on real data; the leaderboard best `LMS4+Rice+xchan_bestpartner` is unchanged (see the 2026-07-22 cycle
-section below). `LMS4+Rice+xchan_jointbp2` won the primary Hyser (+1.12%, highest embeddable Hyser ratio)
+_Updated: 2026-07-31 · branch `compression-cycle-2026-07-31`. **Cycle 16 (2026-07-31) promoted NOTHING and
+retired ONE** — three unanimous-PROMOTE-verified candidates (lag-aligned best-partner, residual-domain
+cross-channel prediction, scale-gated spatial front-end) were measured on all 4 real sets; the leaderboard
+best `LMS4+Rice+xchan_bestpartner` is unchanged (see the 2026-07-31 cycle section below).
+`LMS4+Rice+xchan_lagbp` set the **highest CapgMyo ratio ever measured here (1.3623×, +0.87% over the best)**
+by opening the previously-unavailable **lag axis**, but lost Hyser/OTB at the highest cost of any codec → kept
+as the CapgMyo corner. `LMS4+Rice+xchan_scalesel` took the max-Hyser corner (1.4969×, +1.12%) **and** tied the
+best on OTB in one codec, but regressed CapgMyo/CEMHSEY at +20% cost → kept, not promoted.
+`LMS4+Rice+rxchan_bp` (residual-domain spatial subtract) lost on **all 4** real sets at **equal cost** to its
+raw-domain twin `bestpartner_adaptive` → **RETIRED**. Prior line — cycle 12 (2026-07-22) promoted
+NOTHING and retired TWO; `LMS4+Rice+xchan_jointbp2` won the primary Hyser (+1.12%, highest embeddable Hyser ratio)
 but regressed OTB/CEMHSEY → kept as non-dominated max-Hyser corner, not promoted. `LMS4rs+Rice+xchan_bestpartner`
 (regime-switched temporal bank) lost on all 4 real sets at higher cost → **RETIRED**. `LMS4+Rice+acar_sel+bestpartner`
 (scale gate) kept the OTB corner without the large-array loss → conclusively supersedes the always-on
 `LMS4+Rice+acar+bestpartner` at equal cost → the always-on cascade is **RETIRED**. Prior line — cycle 10
 (2026-07-19) promoted/retired nothing; cycle 7 PROMOTED the current best `LMS4+Rice+xchan_bestpartner`
-(order-4 predictor under the best-partner front-end). **Nine codecs are now `retired=True` in
+(order-4 predictor under the best-partner front-end). **Ten codecs are now `retired=True` in
 `research/registry.py`** (conclusively Pareto-dominated — kept, bit-exact, excluded from the default
 `bench.py` sweep and this table's headline rows; `--include-retired` re-checks on demand):
 `xchan_adaptive`, `xchan_bestpartner` (order-8), `iklt`, `iklt_adaptive`, `xchan_tans`, `xchan_multiparent`,
-`xctx`, `LMS4rs+Rice+xchan_bestpartner` (this cycle), `LMS4+Rice+acar+bestpartner` (this cycle, superseded by
-its scale-selected version). The loop targets 2-3 genuinely distinct candidates per cycle; retirement is how
+`xctx`, `LMS4rs+Rice+xchan_bestpartner` (2026-07-22), `LMS4+Rice+acar+bestpartner` (2026-07-22, superseded by
+its scale-selected version), `LMS4+Rice+rxchan_bp` (this cycle, dominated at equal cost by the raw-domain
+`bestpartner_adaptive` on all 4 real sets). The loop targets 2-3 genuinely distinct candidates per cycle; retirement is how
 dominated ones stop being re-benchmarked every time without deleting them._
 
 ## Headline (REAL data decides — #3)
@@ -360,6 +367,67 @@ promoted; two conclusively Pareto-dominated → two retired.** The leaderboard b
   on tight arrays; frontier #2 (temporal residual entropy via regime switching) is spent negative; frontier #3
   (scale-selected cascade) is spent positive as an engineering result (clean OTB corner) but yields no new best.
   Headline/port pick unchanged.
+
+## Cycle 2026-07-31 — lag-aligned best-partner, residual-domain xchan, scale-gated front-end — NONE promoted, ONE retired
+
+All four real sets reachable, benched at 15 000 samples (`results/cycle_bench.csv`, 120 rows, every row `ok=True`);
+the current best `LMS4+Rice+xchan_bestpartner` reproduces its headline exactly (Hyser 1.480384×, OTB 2.161938×,
+CapgMyo 1.350480×, CEMHSEY 1.955547×). Three distinct candidates, **all double-verified PROMOTE (no splits)**;
+**none beats the current best across real data → none promoted; one conclusively dominated → one retired.**
+The leaderboard best and the port recommendation are unchanged.
+
+| candidate | mechanism / axis | real (Hyser / OTB / CapgMyo / CEMHSEY) | cost | verdict |
+|---|---|---|---:|---|
+| `LMS4+Rice+xchan_lagbp` | lag-aligned best-partner — **TIME ALIGNMENT** of the spatial tap (new axis) | 1.4787× / 2.1240× / **1.3623×** / **1.9558×** | 0.0677 | **kept** — non-dominated CapgMyo corner |
+| `LMS4+Rice+rxchan_bp` | residual-domain rank-1 subtract — **operator ORDER** (MPEG-4 ALS swap) | 1.4686× / 2.0975× / 1.3500× / 1.9407× | 0.0387 | **RETIRED** — dominated at equal cost on all 4 |
+| `LMS4+Rice+xchan_scalesel` | scale-gated front-end: best-partner (C≤64) vs jointbp2 (C≥128) | **1.4969×** / 2.1619× / 1.3503× / 1.9523× | 0.0472 | **kept** — max-Hyser **and** best-tying-OTB corner |
+
+- **`lagbp` (NEW AXIS — lag — spent POSITIVE, on the one array everything else failed).** Searching
+  (partner × lag d∈{−4..+4}) per block and predicting with one joint 2-tap sign-LMS on the *same* parent at two
+  lags produced **1.362255× on CapgMyo — the highest CapgMyo ratio any codec has measured here** (best 1.350480×,
+  `bpa` 1.352866×, WavPack 1.35×), with the **isolated cross-channel gain nearly doubled: +2.25% vs the best's
+  +1.37%**; CEMHSEY marginally best too (1.955829×). But Hyser −0.113% (+11.18% gain) and **OTB −1.754%**
+  (+16.36% vs +18.44%) at the highest cost of any registered codec. **Theory:** the array cross-covariance is
+  `R_cp(τ)`, peaking at the MUAP propagation delay `τ* = IED/CV` (≈4–7 samples at 2048 Hz); all 20 prior codecs
+  evaluated `R_cp(0)` only. CapgMyo's band-pass **differential** array has near-zero *lag-0* neighbour
+  correlation (|corr|≈0.29 — the harness's negative control) but keeps the *propagating* component, so its MI
+  had simply moved to τ≠0. On the tight OTB array, where one transverse neighbour already carries a large
+  `R(0)`, the 9×-wider discrete search only adds model-selection variance. **P1's low-correlation ceiling is
+  amended: the bound is `max_τ I(x_c[n]; x_p[n−τ])`, not `I` at lag 0 (new INSIGHTS P1c).** Non-dominated
+  (highest CapgMyo *and* CEMHSEY) → kept; loses the primary at 72% higher cost → not promoted.
+- **`rxchan_bp` (NEW AXIS — operator order — spent NEGATIVE → RETIRED).** The MPEG-4 ALS / Choi order swap
+  (order-4 LMS on raw channels, then the backward best-partner rank-1 subtract between the two *residuals*,
+  selected by the Rice bits of the actually-coded quantity) lost on **all 4** real sets against its raw-domain
+  twin `LMS4+Rice+xchan_bestpartner_adaptive` at **exactly equal cost 0.0387** (OTB 2.0975× vs 2.1531×, Hyser
+  1.4686× vs 1.4770×, CEMHSEY 1.9407× vs 1.9539×, CapgMyo 1.3500× vs 1.3529×). Isolated cross-channel gain fell
+  to **~80–85% of raw-domain everywhere** (OTB +14.91% vs +18.44%). **Theory:** the two operators do not commute,
+  and the non-commutation runs against the coder — temporal whitening removes exactly the predictable, shared,
+  low-frequency structure the spatial subtract feeds on, so two independently-whitened residuals retain only the
+  high-pass-weighted remnant of the original cross-spectrum. **Whitening is MI-destroying for the *following*
+  stage: decorrelate across channels FIRST, whiten in time SECOND (new INSIGHTS P6).** Pareto-dominated at equal
+  cost on all 4 → **RETIRED** (`retired=True` + `retired_reason` in `research/registry.py`).
+- **`acar_sel`-style gating, applied to the spatial front-end (`scalesel`, frontier #1 — spent as posed).** The
+  header-read channel-count gate reproduced each branch's real-data ratio **exactly** (OTB 2.161938× = the best
+  to 6 dp; Hyser/CapgMyo/CEMHSEY = `jointbp2` to 6 dp), confirming for the second time that a zero-side-info
+  structural gate is a *lossless* composition device. It is the **only codec holding the max-Hyser corner
+  (1.496924×, +1.117%) and the best's OTB ratio at once**, and it removes `jointbp2`'s −0.448% OTB regression
+  entirely. It still **regresses CapgMyo (−0.014%) and CEMHSEY (−0.168%)** at +20% cost (0.0472 vs 0.0394) →
+  not a Pareto win and not a beat across real data → not promoted (same disposition cycle 12 gave `acar_sel`,
+  which had zero regressions and still was not promoted at higher cost). **The residual losses are inherited
+  from `jointbp2`, not introduced by the gate: `C` is a LEAKY proxy for spatial rank** — CEMHSEY's 5×64 strip is
+  geometrically near-1-D and CapgMyo is differential, so both are "large" by channel count yet rank-1-like.
+  Future gates must key on a *measured* rank statistic, not on channel count (INSIGHTS P1-refinement 2026-07-31).
+  Non-dominated (does not dominate `jointbp2`, which is cheaper at 0.0468) → both kept.
+- **Sanity:** max real ratio in the run **2.179540×** (`acar_sel`/OTB) ≪ the 6× leak ceiling; every one of the
+  120 rows bit-exact (`ok=True`), all `embedded=OK` / `neural=OK`; **no regression** — the best reproduces its
+  registered ratios exactly. `research/search.py` on Hyser+OTB reconfirms the port pick unchanged
+  (`lms4s7+x6/b512`, mean 1.8204×, cost 0.0271, cross on→off +14.83%, order 4→8 costs +0.79% — `results/cycle_search.csv`).
+  Only `research/registry.py` (one retire flag — codec encode/decode logic untouched), report files and
+  `SURVEY.md` touched; `rtl/` / `sim/` untouched.
+- **Net:** `LMS4+Rice+xchan_bestpartner` still stands, but the ceiling story changed: it is no longer "spatial MI
+  is exhausted", it is **"spatial MI *at lag 0* is exhausted"**. The lag axis produced the first real-data win
+  over the best on the array the harness had written off as physically empty, and the gate pattern is proven
+  lossless — the next construction is to gate the lag lever, and to re-key the rank gate on a measured statistic.
 
 ## Best embeddable after search (real Hyser)
 

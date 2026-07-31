@@ -2171,6 +2171,430 @@ def jbp2_decode(buf):
 
 
 # ===========================================================================
+# NEW candidate: LAG-ALIGNED (propagation-compensated) best-partner spatial
+# predictor (LMS4+Rice+xchan_lagbp).
+# ---------------------------------------------------------------------------
+# Every one of the 20 registered codecs applies its spatial operator at LAG
+# ZERO: `ec.cross_forward`, `_bp_select`, `_lms4bpa_forward`, `_xj2_forward`,
+# `_jbp2_*` all form x[c] - (beta*x[p])>>s from the raw array, sample-aligned,
+# before the temporal LMS. But an HD-sEMG array's pairwise cross-covariance is a
+# FUNCTION OF LAG, R_cp(tau), and it peaks at the MUAP PROPAGATION DELAY
+# tau* = IED / CV. At 10 mm inter-electrode distance and 3-5 m/s fibre
+# conduction velocity that is 2-3.3 ms ~= 4-7 samples at 2048 Hz -- roughly a
+# quarter period (~90 deg) of the 60-120 Hz dominant sEMG band. So for a
+# neighbour ALONG the fibre direction R(0) is near zero while R(tau*) is large:
+#     I(x_c[n]; x_p[n-tau*])  >>  I(x_c[n]; x_p[n]).
+# A lag-0-only selection is therefore implicitly confined to TRANSVERSE
+# (volume-conducted, near-instantaneous) pairs, and the entire PROPAGATING slice
+# of cross-channel mutual information has never been reachable by any codec
+# here. This candidate opens that NEW degree of freedom -- not "which parent"
+# (bestpartner) and not "how many parents" (joint2/jointbp2), but WHEN.
+#
+# Mechanism = LAG-AWARE SELECTION x JOINT 2-TAP PREDICT (same parent, two lags):
+#   1. SELECT (per channel c, per block i>0, backward, zero side-info): over the
+#      PREVIOUS already-reconstructed RAW block, scan the <=4 causal grid
+#      neighbours (left/up/up-left/up-right, all grid idx<c -- reused
+#      `_bp_candidates`) CROSSED with an integer lag d in {-D..+D}, D=4. For each
+#      (p,d) derive the integer least-squares gain (reused `_bp_opt_beta`) of the
+#      lag-shifted parent and score the estimated Rice bits of
+#      x_c[n] - (beta*x_p[n-d])>>s (reused `_bp_score`); also score the
+#      no-parent option. Keep the min-bits (p*, d*). d*=0 is always in the search
+#      set, so the lag-0 single-tap best-partner front-end is a STRICT SUBSET --
+#      the lag can only be taken when it demonstrably buys bits (this min-bits
+#      gate, plus the d*=0 fallback, bounds the downside if the array's best
+#      partner is a transverse neighbour whose R(0) is already near-maximal).
+#   2. PREDICT that block with ONE JOINT co-adaptive 2-tap sign-sign LMS on
+#      {x_p*[n], x_p*[n-d*]} -- the SAME parent at TWO lags (structure verbatim
+#      from `xchan_joint2`/`_jbp2_forward`, only the second tap's INPUT differs):
+#      pred = (w0*x_p[n] + w1*x_p[n-d*]) >> shift, e = x[c][n] - pred, and BOTH
+#      taps co-adapt against the SHARED post-subtraction residual
+#      (w0 += sign(e)sign(x_p[n]), w1 += sign(e)sign(x_p[n-d*]); +/-1 update,
+#      multiplierless). The taps descend the shared residual, so each adapts to
+#      the correlation REMAINING once the other's contribution is out -- the
+#      stochastic-gradient 2x2 normal-equations solve, which removes the
+#      INSTANTANEOUS (volume-conducted) and PROPAGATING (delayed) components
+#      TOGETHER without the marginal double-counting that sank the retired
+#      summed multiparent. When d*=0 the second tap has no distinct input, so it
+#      is frozen (zero input, no update) and the predictor degenerates EXACTLY to
+#      the single-tap lag-0 spatial form.
+#   3. BOOTSTRAP: block 0 (no previous block to select from) uses the fixed grid
+#      parent (`ec.grid_parents`: left, or up in column 0) at lag 0, so tap w0
+#      warms from t=0; block 1 on re-selects (p*,d*). Taps PERSIST across blocks
+#      (tau* is a physiological constant within a recording, so d* is stable --
+#      P4-refinement's "slowly-varying parameter" argument).
+#
+# CAUSALITY / look-ahead. Only the PARENT row is read at a shifted index, never
+# channel c's own future. Every candidate parent has grid idx < c and the decoder
+# reconstructs channels in index order, so the parent's row is ALREADY fully
+# reconstructed before c is touched -- negative lags (x_p[n+|d|]) are therefore
+# legal and add no channel-c look-ahead. The only latency addition is that near a
+# block's end the second tap reaches up to D samples past the block boundary ON
+# THE PARENT ROW, so the declared look-ahead is D=4 samples (~2 ms at 2 kS/s),
+# not 0 -- honestly recorded in the meta rather than hidden. (Clamping the reach
+# to the block would make it exactly 0 at the cost of a zeroed second tap on
+# ~D/BLOCK ~ 1.5% of samples.) Everything else is unchanged: order-4 sign-sign
+# LMS temporal predictor (INSIGHTS P2) + adaptive Rice back-end (P5), and both
+# the selection AND the taps are recomputed by the decoder from bit-identical
+# reconstructed history -> ZERO side-info (INSIGHTS P4).
+#
+# Distinct from every relative on the axis each names decisive:
+#   - vs KEPT `xchan_jointbp2`: its second tap is a SECOND CHANNEL at lag 0 -- the
+#     degree of freedom P1b proved empty on tight arrays. Here the second tap is
+#     the SAME channel at a different LAG, an axis P1b never measured.
+#   - vs RETIRED `xchan_multiparent`: summed MARGINAL betas double-count the
+#     shared mode; here a JOINT co-adaptive gradient cannot.
+#   - vs RETIRED `iklt_adaptive`: an energy-preserving rotation corrupts BOTH
+#     channels; here the injection is asymmetric rank-1, residual-only, parents
+#     left CLEAN.
+#   - vs PROMOTED `bestpartner` / `bestpartner_adaptive`: lag-0 single tap; d*=0
+#     recovers that form exactly, so this is a strict superset.
+# Embeddable: integer/fixed only, bounded block, per-channel state = order-4 LMS
+# + two int16 taps + (parent,lag) ids + D reconstructed parent int16 (~8 B); one
+# extra multiplierless sign-LMS tap per sample-ch; the per-block (2D+1)x|cands|
+# lag/partner search amortises to ~40 macs/sample-ch (the parent's energy term is
+# shared across lags, so each extra lag costs ONE cross-correlation mac) --
+# comfortable against the 1831 cyc/sample-ch sEMG budget, TIGHT but inside the
+# 125 cyc neural budget; re-searching every k-th block (tau* is constant within a
+# recording) or capping D<=2 divides the search cost by k / by ~2 at no ratio
+# loss. SOURCES: MPEG-4 ALS multichannel inter-channel prediction specifies a
+# selectable TIME LAG plus short cross-prediction filters (Liebchen 2009, IEEE
+# 4458176); HD-sEMG conduction-velocity literature estimates exactly this
+# inter-electrode delay as a cross-correlation lag (Farina & Merletti; Med Biol
+# Eng Comput BF02441587; PMC3616828, propagating vs non-propagating components) --
+# paper-reported, unverified here.
+# ===========================================================================
+LAGBP_MAGIC = 0x474C         # 'LG' (lag-aligned best partner)
+LAGBP_SHIFT = ec.CROSS_SHIFT # fixed-point spatial-tap scale (matches the +xchan family)
+LAGBP_ORDER = LMS4_ORDER     # order-4 temporal base behind the spatial front-end (P2)
+LAGBP_BLOCK = ec.BLOCK       # re-selection block (aligns with the Rice block)
+LAGBP_D = 4                  # max |lag| searched (samples); ~IED/CV at 2 kS/s
+
+
+def _lag_window(row, s, e, d, N):
+    """The lag-shifted parent window x_p[n-d] for n in [s,e), zero-filled where
+    n-d falls outside [0,N). Integer-only; identical on encode and decode."""
+    out = np.zeros(e - s, np.int64)
+    a, b = s - d, e - d                       # source index range
+    lo, hi = max(a, 0), min(b, N)
+    if lo < hi:
+        out[lo - a:hi - a] = row[lo:hi]
+    return out
+
+
+def _lagbp_select_block(xc_prev, x, cands, ps, pe, N, D=LAGBP_D):
+    """Backward per-block joint (partner, LAG) selection from the PREVIOUS raw
+    block, scored in estimated Rice bits. Scans <=4 causal neighbours CROSSED with
+    lags d in {-D..+D} (d=0 included, so the lag-0 best-partner option is always
+    in the set) plus the no-parent option; returns (p*, d*) or (-1, 0). This is
+    the cross-covariance-vs-lag search R_cp(tau) that a lag-0-only front-end
+    cannot express. Integer-only and deterministic, so encode and decode -- both
+    holding the bit-identical reconstructed previous block and fully
+    reconstructed parent rows -- pick identically (zero side-info)."""
+    best_bits = _bp_score(xc_prev)            # option: no cross-channel parent
+    best_p, best_d = -1, 0
+    for p in cands:
+        row = x[p]
+        for d in range(-D, D + 1):
+            xp = _lag_window(row, ps, pe, d, N)
+            b = _bp_opt_beta(xc_prev, xp, LAGBP_SHIFT)
+            if b == 0:
+                continue
+            bits = _bp_score(xc_prev - ((b * xp) >> LAGBP_SHIFT))
+            if bits < best_bits:
+                best_bits, best_p, best_d = bits, p, d
+    return best_p, best_d
+
+
+def _lagbp_forward(x, cols, B=LAGBP_BLOCK, shift=LAGBP_SHIFT, D=LAGBP_D):
+    """Lag-aligned best-partner spatial decorrelation. Per channel c and block i:
+    (p*,d*) is re-selected from the previous raw block (block 0 -> fixed grid
+    parent at lag 0); ONE joint 2-tap sign-sign LMS predicts x[c] from the SAME
+    parent at lags {0, d*}, both taps co-adapting against the shared residual and
+    PERSISTING across blocks. d*=0 freezes the second tap -> exact degeneration to
+    the single-tap lag-0 form. Only channel c's residual is coded; the raw parent
+    rows are left clean. Returns the cross-residual [C,N] int64."""
+    C, N = x.shape
+    x = x.astype(np.int64)
+    y = x.copy()
+    gp = ec.grid_parents(C, cols)             # fixed grid parent, block-0 bootstrap
+    nblocks = (N + B - 1) // B
+    for c in range(C):
+        cands = _bp_candidates(c, cols, C)
+        if not cands:
+            continue                          # grid origin: coded as-is
+        xc = x[c]; yc = y[c]
+        w0 = w1 = 0
+        for i in range(nblocks):
+            s, e = i * B, min((i + 1) * B, N)
+            if i == 0:
+                p, d = int(gp[c]), 0
+            else:
+                p, d = _lagbp_select_block(x[c, (i - 1) * B:i * B], x, cands,
+                                           (i - 1) * B, i * B, N, D)
+            prow = x[p] if p >= 0 else None
+            two = prow is not None and d != 0     # second (lagged) tap active?
+            for t in range(s, e):
+                a0 = int(prow[t]) if prow is not None else 0
+                if two:
+                    tt = t - d
+                    a1 = int(prow[tt]) if 0 <= tt < N else 0
+                else:
+                    a1 = 0
+                pred = (w0 * a0 + w1 * a1) >> shift
+                ev = int(xc[t]) - pred
+                yc[t] = ev
+                se = 1 if ev > 0 else (-1 if ev < 0 else 0)
+                if prow is not None:
+                    w0 += se * (1 if a0 > 0 else (-1 if a0 < 0 else 0))
+                if two:
+                    w1 += se * (1 if a1 > 0 else (-1 if a1 < 0 else 0))
+    return y
+
+
+def _lagbp_inverse(y, cols, B=LAGBP_BLOCK, shift=LAGBP_SHIFT, D=LAGBP_D):
+    """Invert _lagbp_forward. Every candidate parent has grid idx < c so its row is
+    fully reconstructed before c (which is what makes NEGATIVE lags legal); within
+    a channel we rebuild raw block-by-block in time order, so block i-1 is restored
+    before block i and the SAME (p*,d*) is re-selected from it, with the SAME
+    persistent taps re-derived per sample from the shared residual e=y[c,t] and the
+    reconstructed parent -- mirroring the encoder bit-for-bit."""
+    C, N = y.shape
+    y = y.astype(np.int64)
+    x = y.copy()
+    gp = ec.grid_parents(C, cols)
+    nblocks = (N + B - 1) // B
+    for c in range(C):
+        cands = _bp_candidates(c, cols, C)
+        if not cands:
+            continue
+        yc = y[c]; xc = x[c]
+        w0 = w1 = 0
+        for i in range(nblocks):
+            s, e = i * B, min((i + 1) * B, N)
+            if i == 0:
+                p, d = int(gp[c]), 0
+            else:
+                p, d = _lagbp_select_block(x[c, (i - 1) * B:i * B], x, cands,
+                                           (i - 1) * B, i * B, N, D)
+            prow = x[p] if p >= 0 else None   # parent idx < c -> already reconstructed
+            two = prow is not None and d != 0
+            for t in range(s, e):
+                a0 = int(prow[t]) if prow is not None else 0
+                if two:
+                    tt = t - d
+                    a1 = int(prow[tt]) if 0 <= tt < N else 0
+                else:
+                    a1 = 0
+                pred = (w0 * a0 + w1 * a1) >> shift
+                ev = int(yc[t])
+                xc[t] = ev + pred
+                se = 1 if ev > 0 else (-1 if ev < 0 else 0)
+                if prow is not None:
+                    w0 += se * (1 if a0 > 0 else (-1 if a0 < 0 else 0))
+                if two:
+                    w1 += se * (1 if a1 > 0 else (-1 if a1 < 0 else 0))
+    return x
+
+
+def lagbp_encode(x, cols=16):
+    x = np.asarray(x, np.int64)
+    C, N = x.shape
+    y = _lagbp_forward(x, cols)
+    res = ec.lms_forward(y, order=LAGBP_ORDER)   # order-4 sign-sign LMS (INSIGHTS P2)
+    body = b"".join(ec.rice_encode_1d(res[c]) for c in range(C))
+    hdr = struct.pack("<HHII", LAGBP_MAGIC, cols, C, N)  # NO side-info (backward-adaptive)
+    return hdr + body
+
+
+def lagbp_decode(buf):
+    magic, cols, C, N = struct.unpack_from("<HHII", buf, 0)
+    assert magic == LAGBP_MAGIC, "bad xchan_lagbp magic"
+    off = 12
+    res = np.empty((C, N), np.int64)
+    for c in range(C):
+        arr, off = ec.rice_decode_1d(buf, off)
+        res[c] = arr
+    y = ec.lms_inverse(res, order=LAGBP_ORDER)  # matched order-4 inverse
+    x = _lagbp_inverse(y, cols)
+    return x.astype(np.int16)
+
+
+# ===========================================================================
+# NEW candidate: RESIDUAL-DOMAIN cross-channel prediction -- MPEG-4 ALS /
+# Choi-style (LMS4+Rice+rxchan_bp).
+# ---------------------------------------------------------------------------
+# EVERY registered cross-channel codec here decorrelates the RAW array BEFORE
+# the temporal predictor: `_bp_select`, `_lms4bpa_forward`, `_xj2_forward`,
+# `_jbp2_forward`, `_lagbp_forward` and `ec.cross_forward` all form
+# x_c - (beta*x_p)>>s on RAW samples, then run the LMS on that mixture; the
+# partner/beta are likewise estimated from RAW cross-covariance and scored
+# (`_bp_score`) on the RAW decorrelated channel -- i.e. BEFORE `lms_forward`.
+#
+# THEORY (the rate/estimator misalignment this attacks). The coded length is
+# ~ sum_c log2 sigma(e_c): what the coder pays for is the entropy of the
+# RESIDUAL, not of the raw signal. Raw HD-sEMG cross-covariance is dominated by
+# strong shared LOW-FREQUENCY power that the temporal predictor removes anyway,
+# so a beta fitted to RAW energy buys correlation in a band the entropy coder
+# never bills for -- a systematically mis-weighted proxy for the bits actually
+# spent. Moving BOTH the subtraction AND its estimator into the RESIDUAL domain
+# makes the optimization objective and the rate the SAME quantity.
+#
+# This is NOT an algebraic rearrangement. Each channel carries its OWN adaptive
+# order-4 sign-sign LMS, and for adaptive (data-dependent) operators
+#     P_c(x_c - beta*x_p) != P_c(x_c) - beta*P_p(x_p)   whenever P_c != P_p,
+# so swapping the order of the spatial subtract and the temporal predictor is a
+# genuine change of operator order, not a re-association. Two secondary
+# consequences follow: (a) each channel's LMS now adapts on CLEAN raw data
+# instead of a partner-contaminated mixture, so its taps are better conditioned
+# (the same robustness argument INSIGHTS P3-refinement credits the asymmetric
+# rank-1 subtract with); (b) on the decoder e_p IS literally the decoded symbol
+# stream of channel p, so obtaining the predictor input costs nothing.
+#
+# Mechanism (order-swapped vs `bestpartner_adaptive`, otherwise identical):
+#   1. TEMPORAL FIRST: e = lms_forward(x, order=4) per channel, on the
+#      UNMODIFIED raw channel -- no cross-channel front-end at all (INSIGHTS P2:
+#      the temporal predictor stays small and unchanged).
+#   2. SPATIAL SECOND, IN THE RESIDUAL DOMAIN: the coded symbol for channel c,
+#      block i>0, is r_c = e_c - ((beta*e_p)>>s) -- a rank-1 subtract of the
+#      PARENT'S RESIDUAL from the CHILD'S RESIDUAL. Asymmetric/residual-only:
+#      the parent's own coded stream e_p is left CLEAN (the robustness property
+#      P3-refinement isolates; the retired energy-preserving iklt_adaptive
+#      rotation corrupted both channels).
+#   3. ESTIMATOR IN THE SAME DOMAIN AS THE RATE: (partner, beta) are re-derived
+#      per block, backward-adaptively, from the PREVIOUS block of the RESIDUAL
+#      arrays -- integer least-squares gain on e (`_bp_opt_beta`) and min
+#      estimated Rice bits (`_bp_score`) of the ACTUALLY-CODED quantity
+#      e_c - (beta*e_p)>>s, over the <=4 causal grid neighbours (`_bp_candidates`,
+#      all idx < c) plus the no-partner option. Block 0 bootstraps to no-partner.
+#      ZERO side-info: parent rows are decoded before c (idx<c) and block i-1 is
+#      reconstructed before block i, so the decoder re-derives the identical
+#      (partner, beta) from bit-identical history (INSIGHTS P4). Look-ahead 0.
+#
+# Distinct from every relative on the axis each names decisive:
+#   - vs KEPT `bestpartner_adaptive`: SAME 4-candidate neighbourhood, SAME
+#     integer-LS beta, SAME Rice-bits scoring, SAME order-4 LMS + Rice back-end,
+#     SAME per-block backward re-selection -- the ONLY difference is that the
+#     subtract and its estimator act on e (post-LMS) instead of x (pre-LMS). It
+#     is the cleanest possible head-to-head of the two domains, at equal cost.
+#   - vs RETIRED `xctx`: that conditioned the RICE PARAMETER k on a cross-channel
+#     context and left BOTH the residual and the front-end untouched; here the
+#     residual ITSELF is changed and k stays plain per-block adaptive (P5 intact).
+#   - vs RETIRED `xchan_multiparent`: single selected parent, no summed marginals.
+#   - vs RETIRED `iklt`/`iklt_adaptive`: still an asymmetric rank-1 subtract, not
+#     a (fixed or adaptive) energy-preserving multi-tap rotation.
+#   - NOT an entropy back-end swap: the coder stays adaptive Golomb-Rice (P5).
+# PRECEDENT: the MPEG-4 ALS multichannel tool performs "adaptively weighted
+# subtraction of the residual signals of the coding channel from those of the
+# reference channel, both produced by independent linear prediction"; Choi et al.
+# (Sensors 2014, PMC4208236) -- the paper cited for best-partner -- specifies a
+# normalized RESIDUAL cross-correlation gate with an AbsMean-RESIDUAL reference
+# pick (paper-reported, unverified here). The shipped +xchan family is a
+# raw-domain simplification of its own reference recipe, never tested against it.
+# RISK to MEASURE: if neighbouring channels' LMS filters converge to near-identical
+# taps the two domains nearly commute and the gain is small -- but the comparison
+# is at equal cost, so the test is clean either way.
+# ===========================================================================
+RXBP_MAGIC = 0x5852          # 'RX' (residual-domain cross-channel best partner)
+RXBP_SHIFT = ec.CROSS_SHIFT  # fixed-point gain scale (same as the +xchan family)
+RXBP_ORDER = LMS4_ORDER      # order-4 temporal predictor (INSIGHTS P2), on RAW channels
+RXBP_BLOCK = ec.BLOCK        # re-selection block (aligns with the Rice block)
+
+
+def _rxbp_select_block(ec_prev, e, cands, ps, pe):
+    """Backward per-block (partner, beta) selection IN THE RESIDUAL DOMAIN.
+    `ec_prev` is channel c's own residual over the previous block; `e` holds the
+    (already available) residual rows of the candidate parents. For each causal
+    candidate take the integer least-squares gain of the parent's RESIDUAL and
+    score the estimated Rice bits of the quantity that is ACTUALLY CODED,
+    e_c - (beta*e_p)>>s -- so the selection objective and the rate are the same
+    functional. Also scores the no-partner option. Integer-only and
+    deterministic, so encoder and decoder -- both holding the bit-identical
+    previous residual block and fully reconstructed parent residual rows --
+    derive the identical choice (zero side-info)."""
+    best_bits = _bp_score(ec_prev)            # option: no cross-channel subtract
+    best_p, best_b = -1, 0
+    for p in cands:
+        ep = e[p, ps:pe]
+        b = _bp_opt_beta(ec_prev, ep, RXBP_SHIFT)
+        if b == 0:
+            continue
+        bits = _bp_score(ec_prev - ((b * ep) >> RXBP_SHIFT))
+        if bits < best_bits:
+            best_bits, best_p, best_b = bits, p, b
+    return best_p, best_b
+
+
+def _rxbp_forward(e, cols, B=RXBP_BLOCK):
+    """Residual-domain rank-1 cross-channel subtract. `e` is the per-channel
+    order-4 LMS residual of the RAW array; returns the coded symbol array r with
+    r[c, blk i>0] = e[c] - ((beta*e[p])>>s) for the per-block backward-selected
+    (p, beta) (block 0 coded as-is). Parent residual rows are read CLEAN (never
+    the partner-subtracted r[p]), so the injection is asymmetric and the parents'
+    own coded streams are untouched."""
+    C, N = e.shape
+    e = e.astype(np.int64)
+    r = e.copy()
+    nblocks = (N + B - 1) // B
+    for c in range(C):
+        cands = _bp_candidates(c, cols, C)
+        if not cands:                          # grid origin: no causal neighbour
+            continue
+        for i in range(1, nblocks):            # block 0 has no prior block
+            s, en = i * B, min((i + 1) * B, N)
+            ps, pe = (i - 1) * B, i * B
+            p, b = _rxbp_select_block(e[c, ps:pe], e, cands, ps, pe)
+            if p >= 0:
+                r[c, s:en] = e[c, s:en] - ((b * e[p, s:en]) >> RXBP_SHIFT)
+    return r
+
+
+def _rxbp_inverse(r, cols, B=RXBP_BLOCK):
+    """Invert _rxbp_forward. Every candidate parent has grid idx < c so its
+    residual row e[p] is fully restored before c is touched; within a channel we
+    restore block-by-block in time order, so block i-1 is available to re-derive
+    the SAME (partner, beta) that the encoder used for block i -- mirroring the
+    encoder exactly, with nothing transmitted."""
+    C, N = r.shape
+    r = r.astype(np.int64)
+    e = r.copy()
+    nblocks = (N + B - 1) // B
+    for c in range(C):
+        cands = _bp_candidates(c, cols, C)
+        if not cands:
+            continue
+        for i in range(1, nblocks):
+            s, en = i * B, min((i + 1) * B, N)
+            ps, pe = (i - 1) * B, i * B
+            p, b = _rxbp_select_block(e[c, ps:pe], e, cands, ps, pe)
+            if p >= 0:
+                e[c, s:en] = r[c, s:en] + ((b * e[p, s:en]) >> RXBP_SHIFT)
+    return e
+
+
+def rxbp_encode(x, cols=16):
+    x = np.asarray(x, np.int64)
+    C, N = x.shape
+    e = ec.lms_forward(x, order=RXBP_ORDER)     # order-4 LMS on the UNMODIFIED raw channels
+    r = _rxbp_forward(e, cols)                  # residual-domain rank-1 subtract
+    body = b"".join(ec.rice_encode_1d(r[c]) for c in range(C))
+    hdr = struct.pack("<HHII", RXBP_MAGIC, cols, C, N)   # NO side-info (backward-adaptive)
+    return hdr + body
+
+
+def rxbp_decode(buf):
+    magic, cols, C, N = struct.unpack_from("<HHII", buf, 0)
+    assert magic == RXBP_MAGIC, "bad rxchan_bp codec magic"
+    off = 12
+    r = np.empty((C, N), np.int64)
+    for c in range(C):
+        arr, off = ec.rice_decode_1d(buf, off)
+        r[c] = arr
+    e = _rxbp_inverse(r, cols)                  # undo the residual-domain subtract
+    x = ec.lms_inverse(e, order=RXBP_ORDER)     # matched order-4 inverse on raw channels
+    return x.astype(np.int16)
+
+
+# ===========================================================================
 # NEW candidate: regime-switched (context-gated) order-4 temporal predictor
 # behind the proven best-partner spatial front-end
 # (LMS4rs+Rice+xchan_bestpartner).
@@ -2321,6 +2745,144 @@ def rsbp_decode(buf):
         res[c] = arr
     xt = _rsw_inverse(res)
     x = _bp_inverse(xt, parents, betas)
+    return x.astype(np.int16)
+
+
+# ===========================================================================
+# NEW candidate: SCALE-GATED spatial front-end -- SELECTED best-partner (C<=64)
+# vs jointly-solved SELECTED best PAIR (C>=128)  (LMS4+Rice+xchan_scalesel).
+# ---------------------------------------------------------------------------
+# INSIGHTS open-frontier #1, verbatim. Cycle 12 nailed the PER-SCALE optimum of the
+# spatial front-end empirically, and the two winners are DIFFERENT codecs:
+#   * TIGHT 64-ch OTB array: the SINGLE *selected* best-partner wins (+18.44%
+#     cross-channel gain) -- `jointbp2`'s jointly-solved pair reaches only +17.91%.
+#   * LARGE 128-ch primary Hyser: the jointly-solved SELECTED best PAIR wins
+#     (+12.55%, the highest cross-channel gain of ANY codec here, and the highest
+#     embeddable Hyser ratio measured, 1.4969x = +1.12% over the leaderboard best)
+#     -- single best-partner reaches only +11.31%.
+# The reason is STRUCTURAL, not incidental (INSIGHTS P1b-refinement): on a tight
+# array the local pairwise MI is essentially RANK-1 -- one dominant neighbour carries
+# it -- so a second spatial degree of freedom has almost no incremental MI to remove
+# and only adds estimation variance from its extra adaptive tap; on a large array the
+# local structure is genuinely RANK>=2 (diffuse across many similar neighbours), so a
+# second JOINTLY-solved parent finds real MI. Neither FIXED front-end wins both
+# scales, so every fixed choice averages the lever on/off across regimes.
+#
+# INSIGHTS P1-refinement gives the remedy AND the precedent: when a lever's sign
+# flips with a DECODER-OBSERVABLE structural variable, do not average it -- GATE it
+# on that variable. `acar_sel` proved exactly this pattern works at zero side-info
+# (a header-read channel-count gate reproduced the tight-array CAR corner EXACTLY
+# while equalling plain best-partner EXACTLY on all three large arrays, retiring the
+# always-on cascade). This candidate reuses that PROVEN gate mechanism with entirely
+# different branches:
+#   * C <= SCALESEL_MAX_CH (=64), TIGHT array -> `_bp_select`: the promoted best's
+#     per-channel best-of-4 causal-neighbour SINGLE rank-1 subtract with its integer
+#     gain (identical to `LMS4+Rice+xchan_bestpartner`, 2xint16/ch side-info).
+#   * C >= 128, LARGE array -> `_jbp2_forward`: per-block backward SELECTION of the
+#     best PAIR of causal neighbours under a joint 2x2 integer LS score, then ONE
+#     joint co-adaptive 2-tap sign-sign LMS on that pair (identical to
+#     `LMS4+Rice+xchan_jointbp2`, ZERO side-info, look-ahead 0).
+# Behind both branches: the order-4 sign-sign LMS temporal predictor (INSIGHTS P2)
+# + adaptive Rice (P5) -- the promoted best's back-end, unchanged.
+#
+# THE GATE IS FREE AND DECODER-DERIVABLE. The scale statistic is the array channel
+# count C, which the decoder reads from the fixed 12-byte header BEFORE any
+# reconstruction: a single integer compare, ZERO side-info, ZERO circularity (unlike
+# a data-derived statistic, which a per-recording front-end decision cannot use
+# without already knowing the decision it is trying to make). C is precisely the
+# physical variable INSIGHTS P1b-refinement names decisive (array size selects
+# whether the local spatial structure is rank-1 or rank>=2), and the threshold 64 is
+# the MEASURED regime boundary -- inclusive of the 64-ch tight array (OTB), below the
+# 128-/320-ch extended arrays (Hyser, CapgMyo, CEMHSEY). Encoder and decoder derive
+# the identical branch from the identical C, so nothing is transmitted for it.
+#
+# Losslessness: each branch is an exact-integer-invertible primitive reused VERBATIM,
+# and the branch is fixed for the whole recording. The two branches differ in their
+# side-info (best-partner ships parents/betas; jointbp2 ships none), which is legal
+# BECAUSE the decoder derives the branch from C before it parses anything after the
+# header -- so it knows exactly which layout follows. Decode: C<=64 -> Rice ->
+# lms_inverse(order4) -> `_bp_inverse`; C>=128 -> Rice -> lms_inverse(order4) ->
+# `_jbp2_inverse` (which re-derives the same per-block pair and the same persistent
+# taps from bit-identical reconstructed history).
+#
+# DISTINCT from its relatives on the axis each names decisive:
+#   - vs KEPT `acar_sel`: SAME zero-side-info channel-count gate MECHANISM, entirely
+#     different BRANCHES (there: global-CAR cascade vs best-partner; here:
+#     best-partner vs jointly-solved best pair). It gates the SPATIAL-RANK lever, not
+#     the global-common-mode lever.
+#   - vs RETIRED always-on `acar+bestpartner`: that ran a geometry-dependent stage
+#     UNCONDITIONALLY and regressed the large arrays; this one gates.
+#   - vs KEPT `jointbp2` / PROMOTED `bestpartner`: each is exactly ONE branch here;
+#     the codec is neither alone, it is the per-recording selection between them.
+#   - It changes NEITHER the spatial tap's LAG (cf. `lagbp`) nor its DOMAIN (cf.
+#     `rxchan_bp`) -- it selects between two ALREADY-VERIFIED front-ends.
+# COST: the union of the branch taken, never both -> bounded by the more expensive
+# branch (jointbp2, ~0.047); the gate itself is O(1) per recording. Note honestly
+# that 0.047 > the promoted best's 0.0394, so this can only ever be a NON-DOMINATED
+# higher-ratio corner, never a Pareto domination. Intent: the first construction that
+# could clear the best on the primary Hyser AND hold the tight-array OTB corner in a
+# single codec. RISK to MEASURE: the payoff is BOUNDED -- at best it inherits numbers
+# already measured on each scale, and the large-array win is only +1.12% at higher
+# cost; the mid-range 64<C<128 is untested by any real set here.
+# ===========================================================================
+SCALESEL_MAGIC = 0x4753    # 'GS' (gated scale-selected spatial front-end)
+SCALESEL_MAX_CH = 64       # recording-level scale gate: single selected best-partner
+                           # for C<=this (tight array, local spatial MI is rank-1);
+                           # jointly-solved selected best PAIR above (large array,
+                           # local structure is rank>=2) -- INSIGHTS P1b-refinement.
+SCALESEL_ORDER = LMS4_ORDER   # order-4 temporal base behind both branches (P2)
+
+
+def _scalesel_use_pair(C):
+    """Decoder-derivable recording-level scale gate. Use the jointly-solved SELECTED
+    best-PAIR front-end iff the array is large enough (C>SCALESEL_MAX_CH) that its
+    local spatial structure is rank>=2, otherwise the SINGLE selected best-partner
+    (tight array: local pairwise MI is rank-1, a second tap only adds estimation
+    variance). Pure integer comparison on the channel count C, which the decoder
+    reads from the header before any reconstruction -> deterministic, zero
+    circularity, zero side-info; encoder and decoder derive the identical decision
+    from the identical C."""
+    return C > SCALESEL_MAX_CH
+
+
+def scalesel_encode(x, cols=16):
+    x = np.asarray(x, np.int64)
+    C, N = x.shape
+    hdr = struct.pack("<HHII", SCALESEL_MAGIC, cols, C, N)
+    if _scalesel_use_pair(C):
+        y = _jbp2_forward(x, cols)                   # LARGE branch: joint SELECTED pair
+        res = ec.lms_forward(y, order=SCALESEL_ORDER)   # order-4 sign-sign LMS (P2)
+        body = b"".join(ec.rice_encode_1d(res[c]) for c in range(C))
+        return hdr + body                            # zero side-info (backward-adaptive)
+    xt, parents, betas = _bp_select(x, cols)         # TIGHT branch: single best-partner
+    res = ec.lms_forward(xt, order=SCALESEL_ORDER)   # order-4 sign-sign LMS (P2)
+    body = b"".join(ec.rice_encode_1d(res[c]) for c in range(C))
+    side = parents.astype("<i2").tobytes() + betas.astype("<i2").tobytes()
+    return hdr + side + body
+
+
+def scalesel_decode(buf):
+    magic, cols, C, N = struct.unpack_from("<HHII", buf, 0)
+    assert magic == SCALESEL_MAGIC, "bad xchan_scalesel codec magic"
+    off = 12
+    # The gate is derived from the header's C BEFORE anything after it is parsed,
+    # so the decoder knows which branch's payload layout follows.
+    if _scalesel_use_pair(C):
+        res = np.empty((C, N), np.int64)
+        for c in range(C):
+            arr, off = ec.rice_decode_1d(buf, off)
+            res[c] = arr
+        y = ec.lms_inverse(res, order=SCALESEL_ORDER)   # matched order-4 inverse
+        x = _jbp2_inverse(y, cols)                      # undo the joint selected pair
+        return x.astype(np.int16)
+    parents = np.frombuffer(buf, "<i2", C, off).astype(np.int64); off += 2 * C
+    betas = np.frombuffer(buf, "<i2", C, off).astype(np.int64); off += 2 * C
+    res = np.empty((C, N), np.int64)
+    for c in range(C):
+        arr, off = ec.rice_decode_1d(buf, off)
+        res[c] = arr
+    xt = ec.lms_inverse(res, order=SCALESEL_ORDER)      # matched order-4 inverse
+    x = _bp_inverse(xt, parents, betas)                 # undo the single best-partner
     return x.astype(np.int16)
 
 
@@ -3113,6 +3675,278 @@ _register(Codec("LMS4+Rice+xchan_jointbp2", jbp2_encode, jbp2_decode, CodecMeta(
     block_size=JBP2_BLOCK, notes=_JBP2_NOTE), family="cross-channel",
     desc="order-4 LMS + backward-adaptive per-block best-PAIR selection + joint "
          "co-adaptive 2-tap sign-sign LMS spatial predictor (zero side-info) + Rice"))
+
+# NEW candidate (this cycle): LAG-ALIGNED (propagation-compensated) best-partner.
+# Opens a spatial degree of freedom no registered codec has: every one of them
+# applies its spatial operator at LAG ZERO, but the array's pairwise
+# cross-covariance R_cp(tau) peaks at the MUAP propagation delay tau* = IED/CV
+# (~4-7 samples at 2 kS/s), so along-fibre pairs carry their mutual information at
+# a NON-ZERO lag. Per sample-channel the front-end costs the joint 2-tap spatial
+# predict + subtract + two sign-sign tap updates (~_XJ2_XTRA, same shape as
+# joint2/jointbp2) PLUS the per-block backward (partner x LAG) scan. That scan is
+# <=4 candidates x (2D+1)=9 lags = <=36 scored options, but it is NOT 36 full
+# regressions per sample: the parent's energy term <x_p,x_p> is shared across
+# lags (one mac per candidate), so each extra lag costs exactly ONE
+# cross-correlation mac -> ~4*9 + 4 = 40 macs/sample-ch amortised over the block,
+# plus an amortised argmin/divide. Backward-adaptive: both (p*,d*) AND the two
+# taps are recomputed by the decoder from bit-identical reconstructed history, so
+# dec_ops == enc_ops and there is ZERO side-info (INSIGHTS P4). Persistent state
+# per channel: order-4 LMS weights/history + two int16 spatial taps (4 B) + the
+# current (parent, lag) ids (2 B) + a D-deep reconstructed parent int16 window
+# (8 B at D=4) so the lagged tap can be fed without re-reading the parent stream;
+# the search accumulators are O(1) SHARED working state (reused per
+# channel-block, not multiplied per channel) -- noted, not charged per channel.
+# LOOK-AHEAD is honestly declared as D=4 samples (~2 ms at 2 kS/s), NOT 0: only
+# the PARENT row is read at a shifted index (channel c's own future is never
+# touched, and every candidate parent has grid idx < c so its row is already fully
+# reconstructed), but near a block's end the lagged tap reaches up to D samples
+# past the block boundary on that parent row. Clamping the reach to the block
+# would make it exactly 0 at the cost of a zeroed second tap on ~1.5% of samples.
+# ~75 enc ops -> ~90 cyc/sample-ch: comfortable at 2 kS/s, TIGHT but inside the
+# 125-cyc neural budget; decimating the re-search to every k-th block (tau* is a
+# physiological constant within a recording) divides the search term by k.
+_LAGBP_XTRA = 9      # 2-tap spatial predict (mac+shift) + subtract + two sign-sign updates
+_LAGBP_SELECT = 40   # <=4 cands x 9 lags cross-correlation macs + shared energy, amortised
+_LAGBP_STATE = _LMS4_STATE + 14  # +2 int16 taps (4) + (parent,lag) ids (2) + D-deep parent window (8)
+_LAGBP_NOTE = (
+    "LAG-ALIGNED (propagation-compensated) best-partner spatial predictor. ALL 20 prior "
+    "registered codecs apply their spatial operator at LAG ZERO (ec.cross_forward / "
+    "_bp_select / _lms4bpa_forward / _xj2_* / _jbp2_* all form x[c]-(beta*x[p])>>s "
+    "sample-aligned), but an HD-sEMG array's pairwise cross-covariance is a FUNCTION OF "
+    "LAG, R_cp(tau), peaking at the MUAP propagation delay tau*=IED/CV -- ~2-3.3 ms at "
+    "10 mm IED and 3-5 m/s conduction velocity, i.e. 4-7 samples at 2048 Hz, ~a quarter "
+    "period of the 60-120 Hz dominant band. For a neighbour ALONG the fibre direction "
+    "R(0) is near zero while R(tau*) is large, so I(x_c[n]; x_p[n-tau*]) >> "
+    "I(x_c[n]; x_p[n]): lag-0-only selection is implicitly confined to TRANSVERSE "
+    "(volume-conducted) pairs and the PROPAGATING slice of cross-channel MI has never "
+    "been reachable here. STAGE 1 SELECTION (per channel, per block i>0, backward): over "
+    "the PREVIOUS already-reconstructed RAW block, scan the <=4 causal grid neighbours "
+    "(left/up/up-left/up-right, all idx<c, reused _bp_candidates) CROSSED with integer "
+    "lags d in {-D..+D}, D=4; for each (p,d) take the integer-LS gain (_bp_opt_beta) of "
+    "the lag-shifted parent and score the estimated Rice bits of x_c[n]-(beta*x_p[n-d])>>s "
+    "(_bp_score), plus the no-parent option; keep the min-bits (p*,d*). d=0 is always in "
+    "the search set, so the shipped lag-0 best-partner front-end is a STRICT SUBSET and "
+    "the min-bits gate + d*=0 fallback bound the downside. STAGE 2 PREDICT: ONE JOINT "
+    "co-adaptive 2-tap sign-sign LMS on {x_p*[n], x_p*[n-d*]} -- the SAME parent at TWO "
+    "lags (structure verbatim from xchan_joint2; only the second tap's INPUT differs): "
+    "pred=(w0*x_p[n]+w1*x_p[n-d*])>>shift, e=x[c]-pred, BOTH taps co-adapt against the "
+    "SHARED post-subtraction residual (+/-1 sign-sign update, multiplierless), so the "
+    "INSTANTANEOUS and PROPAGATING components are removed TOGETHER by a "
+    "stochastic-gradient 2x2 normal-equations solve -- no marginal double-counting. "
+    "d*=0 freezes the second tap (zero input, no update) -> EXACT degeneration to the "
+    "single-tap lag-0 form. ASYMMETRIC rank-1 residual-only injection: only channel c's "
+    "coded residual is modified, raw parent rows left CLEAN. Taps PERSIST across blocks "
+    "(tau* is a physiological constant within a recording, so d* is stable -- "
+    "P4-refinement). Block 0 bootstraps to the fixed grid parent (ec.grid_parents) at "
+    "lag 0 so w0 warms from t=0; block 1 on re-selects. Both (p*,d*) AND the taps are "
+    "recomputed by the decoder from bit-identical reconstructed history -> ZERO "
+    "side-info (INSIGHTS P4). CAUSALITY: only the PARENT row is read at a shifted index, "
+    "never channel c's own future; every candidate parent has grid idx<c and the decoder "
+    "reconstructs channels in index order, so the parent row is fully reconstructed "
+    "before c and NEGATIVE lags are legal. The one latency addition is that near a "
+    "block's end the lagged tap reaches up to D=4 samples past the block boundary on the "
+    "parent row -> look-ahead declared as 4 samples (~2 ms at 2 kS/s), not 0; clamping "
+    "the reach to the block makes it exactly 0 at the cost of a zeroed second tap on "
+    "~D/BLOCK ~1.5% of samples. Behind the front-end: order-4 sign-sign LMS temporal "
+    "predictor (INSIGHTS P2) + adaptive Rice (P5) -- the promoted best's back-end. "
+    "DISTINCT: vs KEPT jointbp2 its second tap is a second CHANNEL at lag 0 (the DOF P1b "
+    "proved empty on tight arrays) whereas here it is the SAME channel at a different "
+    "LAG, an axis P1b never measured; vs RETIRED multiparent (summed MARGINAL betas "
+    "double-count -- a joint gradient cannot); vs RETIRED iklt_adaptive (energy-preserving "
+    "rotation corrupts BOTH channels -- this is asymmetric rank-1, parents clean); vs "
+    "PROMOTED bestpartner (lag-0 single tap, recovered exactly at d*=0). COST NOTE: the "
+    "<=36-option scan is not 36 regressions -- the parent energy <x_p,x_p> is shared "
+    "across lags, so each extra lag costs ONE cross-correlation mac (~40 macs/sample-ch "
+    "amortised); re-searching every k-th block, or capping D<=2, divides that by k / ~2 "
+    "at no ratio loss, which is the mitigation if the tight 30 kS/s neural regime is the "
+    "target. RISK to MEASURE: if best-partner already lands on transverse neighbours "
+    "whose R(0) is near the array maximum, the delayed tap may add estimation variance "
+    "rather than MI. Basis: MPEG-4 ALS multichannel inter-channel prediction specifies a "
+    "selectable TIME LAG plus short cross-prediction filters (Liebchen 2009, IEEE "
+    "4458176); HD-sEMG conduction-velocity literature estimates exactly this "
+    "inter-electrode delay as a cross-correlation lag (Farina & Merletti; Med Biol Eng "
+    "Comput BF02441587; PMC3616828 propagating vs non-propagating components) -- "
+    "paper-reported, unverified here.")
+_register(Codec("LMS4+Rice+xchan_lagbp", lagbp_encode, lagbp_decode, CodecMeta(
+    integer_only=True, enc_ops=_LMS4_OPS + _LAGBP_XTRA + _LAGBP_SELECT,
+    dec_ops=_LMS4_OPS + _LAGBP_XTRA + _LAGBP_SELECT,
+    state_bytes_per_ch=_LAGBP_STATE, causal=True, lookahead_samples=LAGBP_D,
+    block_size=LAGBP_BLOCK, notes=_LAGBP_NOTE), family="cross-channel",
+    desc="order-4 LMS + backward-adaptive per-block (partner x LAG) selection + joint "
+         "co-adaptive 2-tap sign-sign LMS on the SAME parent at two lags (zero "
+         "side-info) + Rice"))
+
+# NEW candidate (this cycle): RESIDUAL-DOMAIN cross-channel prediction. Cost is
+# deliberately IDENTICAL in shape to `LMS4+Rice+xchan_bestpartner_adaptive` -- the
+# order-4 LMS (_LMS4_OPS), one rank-1 multiply-shift-subtract per sample-channel
+# (_XCHAN_OPS), and the same <=4-candidate per-block backward scan amortised over
+# the block (_LMS4BPA_SELECT) -- because the ONLY change is WHICH array those
+# identical operations read (post-LMS residuals instead of pre-LMS raw). The
+# decoder recomputes the same selection from bit-identical reconstructed history,
+# so dec_ops == enc_ops. Persistent per-channel state is the order-4 LMS
+# weights/history + the current (partner id, int16 beta) (~3 B); it needs NO
+# separate decorrelated-raw array (the parent's residual is a value the pipeline
+# already produces), and the <=4-candidate covariance accumulators are O(1) SHARED
+# working state (reused per channel-block, not multiplied per channel) -- noted,
+# not charged per channel. Backward-adaptive -> look-ahead 0, ZERO side-info.
+_RXBP_STATE = _LMS4_STATE + 3   # order-4 LMS + current (partner byte, int16 beta)
+_RXBP_NOTE = (
+    "RESIDUAL-DOMAIN cross-channel prediction (MPEG-4 ALS / Choi-style). All 21 "
+    "prior registered cross-channel codecs decorrelate the RAW array BEFORE the "
+    "temporal predictor (ec.cross_forward / _bp_select / _lms4bpa_forward / _xj2_* "
+    "/ _jbp2_* / _lagbp_* all form x_c-(beta*x_p)>>s on RAW samples, and _bp_score "
+    "is applied BEFORE lms_forward). Coded length is ~sum_c log2 sigma(e_c), so the "
+    "rate objective is the entropy of the RESIDUAL -- yet every shipped codec fits "
+    "beta by integer least-squares on RAW signals and selects the partner by Rice "
+    "bits of the RAW decorrelated channel. Raw HD-sEMG cross-covariance is dominated "
+    "by shared low-frequency power the temporal predictor removes anyway, so the "
+    "shipped estimator buys correlation in a band the coder never bills for -- a "
+    "systematically mis-weighted proxy for the bits actually spent. MECHANISM (order "
+    "swap): (1) run the order-4 sign-sign LMS on each UNMODIFIED raw channel to get "
+    "e_c (INSIGHTS P2, predictor unchanged and now adapting on CLEAN data instead of "
+    "a partner-contaminated mixture); (2) code r_c = e_c-((beta*e_p)>>s), a rank-1 "
+    "subtract of the PARENT'S RESIDUAL from the CHILD'S RESIDUAL, asymmetric and "
+    "residual-only so the parent's own coded stream stays CLEAN; (3) derive "
+    "(partner, beta) per block, backward-adaptively, IN THE SAME DOMAIN -- integer-LS "
+    "gain (_bp_opt_beta) on e and min estimated Rice bits (_bp_score) of the "
+    "ACTUALLY-CODED quantity e_c-(beta*e_p)>>s, over the <=4 causal grid neighbours "
+    "(_bp_candidates, all idx<c) plus the no-partner option; block 0 bootstraps to "
+    "no-partner. Selection objective and rate become the SAME functional. NOT an "
+    "algebraic rearrangement: each channel carries its own ADAPTIVE order-4 LMS and "
+    "P_c(x_c-beta*x_p) != P_c(x_c)-beta*P_p(x_p) whenever P_c != P_p, so this is a "
+    "genuine change of operator order. On the decoder e_p IS literally the decoded "
+    "symbol stream of channel p, so the predictor input is free; parent rows (idx<c) "
+    "are decoded before c and block i-1 before block i, so the identical (partner, "
+    "beta) is re-derived from bit-identical history -> ZERO side-info, look-ahead 0 "
+    "(INSIGHTS P4). DISTINCT: vs KEPT bestpartner_adaptive -- same neighbourhood, "
+    "same integer-LS beta, same Rice-bits scoring, same order-4 LMS + Rice back-end, "
+    "same per-block backward re-selection; the ONLY difference is that the subtract "
+    "AND its estimator act on e (post-LMS) instead of x (pre-LMS), making this a "
+    "clean equal-cost head-to-head of the two domains. vs RETIRED xctx -- that "
+    "conditioned the RICE PARAMETER on a cross-channel context and left both the "
+    "residual and the front-end untouched; here the residual ITSELF changes and k "
+    "stays plain per-block adaptive (P5 intact, no entropy back-end swap). vs RETIRED "
+    "multiparent -- single selected parent, no summed marginals. vs RETIRED "
+    "iklt/iklt_adaptive -- still an asymmetric rank-1 subtract, parents clean, not an "
+    "energy-preserving multi-tap rotation. COST: ~neutral to the promoted best "
+    "(identical per-sample arithmetic -- one int16 multiply-shift + one add -- and it "
+    "REMOVES the separate decorrelated raw array from state); fits both the 1875 cyc "
+    "sEMG and the 125 cyc neural budgets. RISK to MEASURE: if neighbouring channels' "
+    "LMS filters converge to near-identical taps the two domains nearly commute and "
+    "the gain is small -- but the head-to-head is at equal cost, so the test is clean "
+    "either way. Basis: the MPEG-4 ALS multichannel tool performs 'adaptively "
+    "weighted subtraction of the residual signals of the coding channel from those of "
+    "the reference channel, both produced by independent linear prediction'; Choi et "
+    "al. (Sensors 2014, PMC4208236) -- the paper cited for best-partner -- specifies a "
+    "normalized RESIDUAL cross-correlation gate with an AbsMean-RESIDUAL reference "
+    "pick (paper-reported, unverified here). The shipped +xchan family is a "
+    "raw-domain simplification of its own reference recipe, never tested against it.")
+_register(Codec("LMS4+Rice+rxchan_bp", rxbp_encode, rxbp_decode, CodecMeta(
+    integer_only=True, enc_ops=_LMS4_OPS + _XCHAN_OPS + _LMS4BPA_SELECT,
+    dec_ops=_LMS4_OPS + _XCHAN_OPS + _LMS4BPA_SELECT,
+    state_bytes_per_ch=_RXBP_STATE, causal=True, lookahead_samples=0,
+    block_size=RXBP_BLOCK, notes=_RXBP_NOTE), family="cross-channel",
+    desc="order-4 LMS on RAW channels + RESIDUAL-domain backward-adaptive per-block "
+         "best-partner rank-1 subtract, selected by Rice bits of the coded residual "
+         "(zero side-info) + Rice",
+    retired=True,
+    retired_reason="Conclusively Pareto-dominated by LMS4+Rice+xchan_bestpartner_adaptive "
+                   "at EQUAL cost 0.0387 -- same zero-side-info per-block best-partner "
+                   "selection, only the domain differs, and the raw-domain sibling is "
+                   "strictly higher on ALL 4 real sets (otb 2.0975x vs 2.1531x, hyser "
+                   "1.4686x vs 1.4770x, cemhsey 1.9407x vs 1.9539x, capgmyo 1.3500x vs "
+                   "1.3529x; also below the leaderboard best on all 4). Moving the rank-1 "
+                   "subtract AFTER the per-channel LMS destroys spatial MI: each channel's "
+                   "independently-adapted whitening filter is a different linear operator, "
+                   "so the two residuals are no longer aligned copies of a shared source "
+                   "and their cross-correlation is far weaker than the raw signals' -- "
+                   "decorrelate FIRST, whiten SECOND. "
+                   "experiments/016_lms4_rice_rxchan_bp.md, cycle 2026-07-31."))
+
+# NEW candidate (this cycle): SCALE-GATED spatial front-end (INSIGHTS open-frontier
+# #1). A META-GATE over two ALREADY-VERIFIED front-ends -- NOT a new mechanism: per
+# recording it picks the SINGLE selected best-partner (LMS4+Rice+xchan_bestpartner)
+# for TIGHT arrays (C<=64, local spatial MI is rank-1) vs the jointly-solved SELECTED
+# best PAIR (LMS4+Rice+xchan_jointbp2) for LARGE arrays (C>=128, local structure is
+# rank>=2), from the decoder-derivable array channel count C. Cost is the union of the
+# branch taken (never both), so ops below quote the WORST case -- the jointbp2 branch:
+# the joint 2-tap predict + subtract + two sign-sign tap updates (_XJ2_XTRA) plus the
+# per-block backward pair-selection scan (_JBP2_SELECT) on the order-4 LMS base
+# (_LMS4_OPS); on tight arrays the codec is strictly cheaper (best-partner's
+# _XCHAN_OPS + _BP_SELECT_OPS, with a search-free decoder). dec_ops likewise quotes
+# the worst case (the jointbp2 branch recomputes the selection, so dec == enc there).
+# State quotes the larger of the two branches (best-partner's _LMS4_STATE+_BP_STATE=31
+# vs jointbp2's _JBP2_STATE=30). Look-ahead quotes the worst case too: the jointbp2
+# branch is 0 (fully backward-adaptive) but the best-partner branch's software impl
+# derives (parent,beta) offline, embeddable per block -> ec.BLOCK. The GATE itself
+# costs O(1) per recording and ZERO side-info (a single integer compare on the header
+# C), so it adds nothing to either branch's per-sample budget.
+_SCALESEL_NOTE = (
+    "SCALE-GATED cross-channel front-end -- a META-GATE over two ALREADY-VERIFIED "
+    "spatial front-ends (NOT a new mechanism), gating the SPATIAL-RANK lever on array "
+    "geometry. INSIGHTS P1b-refinement measured the per-scale optimum and the two "
+    "winners are different codecs: on the TIGHT 64-ch OTB array the SINGLE *selected* "
+    "best-partner wins (+18.44% cross-channel gain vs jointbp2's +17.91%), while on "
+    "the LARGE 128-ch primary Hyser the jointly-solved SELECTED best PAIR wins "
+    "(+12.55%, the highest cross-channel gain of any codec here, and the highest "
+    "embeddable Hyser ratio measured, 1.4969x = +1.12% over the leaderboard best, vs "
+    "best-partner's +11.31%). The cause is STRUCTURAL: local pairwise MI is "
+    "essentially RANK-1 on a tight array (one dominant neighbour, so a second spatial "
+    "degree of freedom removes almost no incremental MI and only adds its extra "
+    "adaptive tap's estimation variance) but RANK>=2 on a large array (diffuse local "
+    "structure across many similar neighbours, so a second JOINTLY-solved parent finds "
+    "real MI). No FIXED front-end wins both scales. REMEDY + PRECEDENT (INSIGHTS "
+    "P1-refinement): when a lever's sign flips with a DECODER-OBSERVABLE structural "
+    "variable, GATE it on that variable rather than averaging it on/off -- exactly the "
+    "pattern acar_sel proved, which reproduced both regimes exactly at zero side-info. "
+    "BRANCHES: C<=SCALESEL_MAX_CH=64 (TIGHT) -> _bp_select, the promoted best's "
+    "per-channel best-of-4 causal-neighbour SINGLE rank-1 subtract with integer gain "
+    "(identical to LMS4+Rice+xchan_bestpartner; 2xint16/ch side-info, search-free "
+    "decoder); C>=128 (LARGE) -> _jbp2_forward, per-block backward SELECTION of the "
+    "best PAIR of causal neighbours under a joint 2x2 integer-LS score followed by ONE "
+    "joint co-adaptive 2-tap sign-sign LMS on that pair, taps persisting across blocks "
+    "(identical to LMS4+Rice+xchan_jointbp2; ZERO side-info, look-ahead 0). Behind "
+    "both: order-4 sign-sign LMS + adaptive Rice (INSIGHTS P2/P5), the promoted best's "
+    "back-end, unchanged. THE GATE: a pure integer compare on the array channel count "
+    "C, which the decoder reads from the fixed 12-byte header BEFORE parsing anything "
+    "after it -> deterministic, ZERO circularity, ZERO side-info, O(1) per recording; "
+    "encoder and decoder derive the identical branch from the identical C, which is "
+    "also what tells the decoder which branch's payload layout (with or without the "
+    "best-partner parents/betas block) follows. C is precisely the physical variable "
+    "P1b-refinement names decisive, and 64 is the MEASURED regime boundary -- "
+    "inclusive of the 64-ch tight OTB array, below the 128-/320-ch Hyser/CapgMyo/"
+    "CEMHSEY arrays. Both branches are exact-integer-invertible primitives reused "
+    "VERBATIM and the branch is fixed for the whole recording, so decode inverts the "
+    "matching front-end (_bp_inverse, or _jbp2_inverse which re-derives the same "
+    "per-block pair and persistent taps from bit-identical reconstructed history). "
+    "DISTINCT: vs KEPT acar_sel -- same zero-side-info channel-count gate MECHANISM, "
+    "entirely different BRANCHES (there global-CAR-cascade vs best-partner; here "
+    "best-partner vs jointly-solved best pair), gating the spatial-RANK lever instead "
+    "of the global-common-mode lever. vs RETIRED always-on acar+bestpartner -- that "
+    "ran a geometry-dependent stage UNCONDITIONALLY and regressed the large arrays; "
+    "this gates it. vs KEPT jointbp2 / PROMOTED bestpartner -- each is exactly ONE "
+    "branch; the codec is the per-recording SELECTION between them. It changes neither "
+    "the spatial tap's LAG (cf. lagbp) nor its DOMAIN (cf. rxchan_bp). COST: the union "
+    "of the branch taken, never both -> bounded by the jointbp2 branch (~0.047), with "
+    "the tight-array branch strictly cheaper; at 0.047 > the promoted best's 0.0394 "
+    "this can only ever be a NON-DOMINATED higher-ratio corner, never a Pareto "
+    "domination. INTENT: the first construction that could clear the best on the "
+    "primary Hyser AND hold the tight-array OTB corner in one codec. RISK to MEASURE: "
+    "the payoff is BOUNDED -- at best it inherits per-scale numbers already measured, "
+    "the large-array win is only +1.12% at higher cost, and the mid-range 64<C<128 is "
+    "untested by any real set here. Basis: the shipped best-partner + jointbp2 "
+    "front-ends; the channel-count meta-gate is the acar_sel pattern (verified here "
+    "for the CAR lever, unverified for this one).")
+_register(Codec("LMS4+Rice+xchan_scalesel", scalesel_encode, scalesel_decode, CodecMeta(
+    integer_only=True,
+    enc_ops=_LMS4_OPS + _XJ2_XTRA + _JBP2_SELECT,
+    dec_ops=_LMS4_OPS + _XJ2_XTRA + _JBP2_SELECT,
+    state_bytes_per_ch=max(_JBP2_STATE, _LMS4_STATE + _BP_STATE), causal=True,
+    lookahead_samples=ec.BLOCK, block_size=JBP2_BLOCK, notes=_SCALESEL_NOTE),
+    family="cross-channel",
+    desc="scale-gated spatial front-end: per-recording gate (by channel count) "
+         "between single selected best-partner (C<=64) and jointly-solved selected "
+         "best PAIR (C>=128) + order-4 LMS + Rice"))
 
 
 def list_codecs(include_retired=False):
