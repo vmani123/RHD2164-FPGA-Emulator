@@ -6,7 +6,21 @@ produced by the harness (`research/bench.py` + `research/search.py`), asserted
 bit-exact, and gated by `embedded_ok` — never by reasoning (non-negotiables #1,
 #2, #4). Maintained per Stage 6 of `../COMPRESSION_RESEARCH_AGENT_PROMPT.md`.
 
-_Updated: 2026-07-22 · branch `compression-cycle-2026-07-22`. **Cycle 12 (2026-07-22) promoted
+_Updated: 2026-08-01 · branch `compression-cycle-2026-08-01`. **Cycle 13 (2026-08-01) PROMOTED ONE and retired
+NOTHING.** `LMS4+Rice+xchan_mst` (Chow–Liu maximum-MI spanning-tree parent assignment + topological coding order,
+zero side-info) is the **first candidate since cycle 7 to STRICTLY beat the leaderboard best on ALL FOUR real
+datasets** — otb 2.1727× (+0.50%), hyser 1.4831× (+0.18%), capgmyo 1.3529× (+0.18%), cemhsey 1.9575× (+0.10%),
+4-set mean +0.255% — with a unanimous PROMOTE from both verifiers → **new best-ratio embeddable**. **Scope,
+stated loudly: this is the ratio headline only, NOT the port pick.** Its cost is 0.106 = **2.69×** the previous
+best's 0.0394 for +0.255%, it **fails the tight 30 kS/s neural budget** (155 > 125 cyc/sample-ch), and the
+already-registered `LMS4+Rice+acar_sel+bestpartner` (cost 0.043) matches its 4-set mean to within +0.002% — so
+**"→ the one codec to port next" is UNCHANGED** (`lms4s7+x6/b512`, cost 0.027, `neural_ok=OK`). The other two
+candidates were kept, not promoted, not retired: `LMS4+Rice+xscale_sel` (channel-count-gated best-partner ⊕
+jointbp2) reproduces each branch exactly at zero side-info but **refutes its own premise** — it wins Hyser
+(+1.12%) and regresses CEMHSEY (−0.168%)/CapgMyo (−0.014%), because channel count is not a sufficient statistic
+for local-MI rank; `LMS4+Rice+xchan_lagbp` (propagation-matched lagged parent) loses −1.52% on the 4-set mean
+(−4.93% OTB) yet holds the **strict maximum CapgMyo ratio of the entire registry** (1.3578×). See the
+2026-08-01 cycle section below. Prior line — **cycle 12 (2026-07-22) promoted
 NOTHING and retired TWO** — three unanimous-PROMOTE-verified candidates (best-pair-selection ⊕ joint
 2-tap LMS, regime-switched predictor bank, scale-selected CAR cascade) all landed at ≤ the current best
 on real data; the leaderboard best `LMS4+Rice+xchan_bestpartner` is unchanged (see the 2026-07-22 cycle
@@ -37,8 +51,12 @@ Every set benched at **15 000 samples**; tables `results/06_real_bench.csv`
 | codec | ratio | %-of-FLAC | embedded_ok | note |
 |---|---:|---:|:--:|---|
 | lzma | 1.67× | 171% | ref | **offline**, not embeddable |
-| **LMS4+Rice+xchan_bestpartner** | **1.480×** | **151%** | ✅ | **best embeddable — PROMOTED 2026-07-16** (order-4 + best-partner, cost 0.039) |
-| LMS+Rice+xchan | 1.474× | 151% | ✅ | prior best (order-8 single-parent, cost 0.057) |
+| LMS4+Rice+xscale_sel / xchan_jointbp2 | 1.497× | 153% | ✅ | highest embeddable **Hyser** ratio (max-Hyser corners, cost 0.048 / 0.047) — but both regress CEMHSEY, so neither is the best on real data |
+| LMS+Rice+xchan_joint2 | 1.493× | 153% | ✅ | cost-dominant Hyser corner (0.037, zero side-info) |
+| **LMS4+Rice+xchan_mst** | **1.483×** | **152%** | ✅ | **best embeddable on REAL data — PROMOTED 2026-08-01** (Chow–Liu MST parents + topological order, zero side-info, cost 0.106). Beats the prior best on **all 4** real sets. **Not the port pick** — 2.69× the cost, `neural_ok` fails |
+| LMS4+Rice+acar_sel+bestpartner | 1.480× | 152% | ✅ | OTB max-ratio corner (2.180×), cost 0.043; ties mst's 4-set mean to +0.002% |
+| LMS4+Rice+xchan_bestpartner | 1.480× | 151% | ✅ | prior best (PROMOTED 2026-07-16, cost 0.039) — still the cheapest codec within 0.3% of the top |
+| LMS+Rice+xchan | 1.474× | 151% | ✅ | earlier best (order-8 single-parent, cost 0.057) |
 | delta+Rice+xchan | 1.45× | 149% | ✅ | cheapest xchan |
 | zstd-19 | 1.44× | 147% | ref | offline |
 | mtscomp | 1.41× | 145% | ref | neuro per-channel reference |
@@ -47,24 +65,33 @@ Every set benched at **15 000 samples**; tables `results/06_real_bench.csv`
 | LMS+Rice | 1.33× | 136% | ✅ | temporal only |
 | flac | 0.98× | 100% | ref | the target to beat (expands here) |
 
-**Embedded `LMS4+Rice+xchan_bestpartner` (1.480×) beats every embeddable-feasible
+**Embedded `LMS4+Rice+xchan_mst` (1.483×) beats every embeddable-feasible
 reference — WavPack 1.34×, mtscomp 1.41×, and even offline zstd-19 (1.44×) — at a
-fraction of the compute (cost 0.039), proven bit-exact. Only offline LZMA (1.67×)
+fraction of the compute, proven bit-exact. Only offline LZMA (1.67×)
 is ahead, and it is not portable to the node.** FLAC actually *expands* Hyser
 (0.98×), so %-of-FLAC runs high; the honest bar on Hyser is the neuro/audio
 references (WavPack, mtscomp), all of which the embedded codec beats.
 
-- **Achieved cross-channel gain: +11.3%** (LMS 1.330× → 1.480×) — the dominant lever.
-- Max embeddable ratio 1.480× ≪ the 6× sanity ceiling → honest broadband EMG.
+- **Achieved cross-channel gain: +11.3%** (LMS4 temporal-only 1.3321× → mst 1.4831×) — the dominant lever.
+  The whole promotion is +0.18% of that; every registered cross-channel front-end lands within ~1.2% of the same
+  Hyser ceiling.
+- Max embeddable ratio 1.497× ≪ the 6× sanity ceiling → honest broadband EMG.
 
-### Real per-dataset summary (best embeddable = `LMS4+Rice+xchan_bestpartner`, cost 0.039)
+### Real per-dataset summary (best embeddable = `LMS4+Rice+xchan_mst`, cost 0.106 — see the cost caveat)
 
-| dataset | ch | best-emb ratio | %-of-FLAC | vs prior best (LMS+Rice+xchan) | FLAC | best offline ref |
+| dataset | ch | best-emb ratio | %-of-FLAC | vs prior best (`LMS4+Rice+xchan_bestpartner`, 0.0394) | FLAC | best offline ref |
 |---|--:|--:|--:|--:|--:|---|
-| **hyser_1dof_f1_s1** (primary) | 128 | **1.480×** | 151% | +0.45% (1.474×) | 0.98× | lzma 1.67× |
-| otb_hdsemg_vl | 64 | **2.162×** | 176% | +0.90% (2.143×) | 1.23× | wavpack 1.85× (emb-class) |
-| cemhsey_s1_d1t1 | 320 | **1.956×** | 167% | +0.02% (1.955×) | 1.17× | lzma 2.06× |
-| capgmyo_dba_s1 | 128 | **1.350×** | 137% | +0.09% (1.349×) | 0.98× | wavpack 1.35× |
+| **hyser_1dof_f1_s1** (primary) | 128 | **1.4831×** | 152% | **+0.18%** (1.4804×) | 0.98× | lzma 1.67× |
+| otb_hdsemg_vl | 64 | **2.1727×** | 177% | **+0.50%** (2.1619×) | 1.23× | wavpack 1.85× (emb-class) |
+| cemhsey_s1_d1t1 | 320 | **1.9575×** | 167% | **+0.10%** (1.9555×) | 1.17× | lzma 2.06× |
+| capgmyo_dba_s1 | 128 | **1.3529×** | 137% | **+0.18%** (1.3505×) | 0.98× | wavpack 1.35× |
+
+> **Cost caveat on the new best (read before porting).** `xchan_mst` wins all four sets, but at cost **0.106**
+> vs the prior best's **0.0394** (2.69×) for a 4-set-mean **+0.255%**, and it **fails the tight 30 kS/s neural
+> budget** (155 > 125 cyc/sample-ch; `embedded_ok` still holds at ~8% of the roomy 2 kS/s sEMG budget). The
+> already-registered `LMS4+Rice+acar_sel+bestpartner` reaches a 4-set mean of 1.741488× at cost 0.043 versus
+> mst's 1.741522× — a **+0.002% dead tie at 2.5× the cost**. So the ratio headline moved; **the port pick did
+> not** (see "→ The one codec to port next", unchanged).
 
 - Cross-channel gain **tracks real spatial redundancy**, exactly as the mechanism
   predicts: strong on OTB/CEMHSEY/Hyser (neighbour |corr| 0.73–0.79), near-zero on
@@ -361,6 +388,76 @@ promoted; two conclusively Pareto-dominated → two retired.** The leaderboard b
   (scale-selected cascade) is spent positive as an engineering result (clean OTB corner) but yields no new best.
   Headline/port pick unchanged.
 
+## Cycle 2026-08-01 — scale gate, lagged parent, Chow–Liu MST graph — ONE promoted, NONE retired
+
+Three genuinely distinct candidates, all bit-exact and `embedded_ok`, all **unanimous PROMOTE** from both
+adversarial verifiers (no splits). Measured on all 4 real sets at 15 000 samples
+(`results/cycle_bench.csv`, 120 rows, every row `ok=True`).
+
+| codec | otb | **hyser** | capgmyo | cemhsey | 4-set mean | vs best | cost | neural_ok | disposition |
+|---|---:|---:|---:|---:|---:|---:|---:|:--:|---|
+| **LMS4+Rice+xchan_mst** | **2.1727×** | **1.4831×** | **1.3529×** | **1.9575×** | **1.741522** | **+0.255% on ALL 4** | 0.106 | − | **PROMOTED — new best-ratio embeddable** |
+| LMS4+Rice+xscale_sel | 2.1619× | 1.4969× | 1.3503× | 1.9523× | 1.740352 | +1.12% hyser, −0.17% cemhsey | 0.0482 | OK | kept, not promoted, not retired |
+| LMS4+Rice+xchan_lagbp | 2.0553× | 1.4763× | **1.3578×** | 1.9532× | 1.710618 | −1.52% mean, −4.93% otb | 0.0991 | − | kept (max-CapgMyo corner), not promoted, not retired |
+| _prior best_ `LMS4+Rice+xchan_bestpartner` | 2.1619× | 1.4804× | 1.3505× | 1.9555× | 1.737087 | — | 0.0394 | OK | still the cheapest codec within 0.3% of the top |
+| _matched twin_ `..._bestpartner_adaptive` | 2.1531× | 1.4770× | 1.3529× | 1.9539× | 1.734235 | — | 0.0387 | OK | the zero-side-info reference each candidate is isolated against |
+
+**Isolated cross-channel gain on REAL data** (candidate ÷ the identical back-end with the front-end removed —
+`LMS4+Rice` temporal-only, measured this cycle at otb 1.834664×, hyser 1.332070×, capgmyo 1.333589×,
+cemhsey 1.728021×):
+
+| codec | otb | hyser | capgmyo | cemhsey |
+|---|---:|---:|---:|---:|
+| LMS4+Rice+xchan_mst | **+18.42%** | **+11.34%** | +1.45% | **+13.28%** |
+| LMS4+Rice+xscale_sel | +17.84% | **+12.38%** | +1.25% | +12.98% |
+| LMS4+Rice+xchan_lagbp | +12.03% | +10.82% | **+1.81%** | +13.03% |
+| `bestpartner` (prior best) | +17.84% | +11.13% | +1.27% | +13.17% |
+
+- **`LMS4+Rice+xchan_mst` (PROMOTED).** Attribution is 100% cross-channel front-end — predictor and back-end are
+  byte-identical to `bestpartner`, and the per-sample apply is the same single multiply-shift-subtract. Against its
+  exactly matched twin `bestpartner_adaptive`, the graph+order lever alone is **+0.908% / +0.410% / +0.003% /
+  +0.179%**. The mechanism engages hard: a probe of the shipped `_mst_build_block` over every block of every real
+  set shows **47–68% of channels take a parent outside the 4-candidate raster set** and 38–61% a *higher-indexed*
+  channel that only the topological coding order makes legal. **And it still moves the ratio <0.5%** — so this is a
+  *ceiling* measurement of the parent-identity axis (Chow–Liu is its exact optimum), not a sample. The gain that
+  does appear is concentrated on OTB (5×13) and CEMHSEY (5×64): boundary-pathology repair (the column-0 raster
+  "left" neighbour is the far-edge electrode; the MST never selects it), not new interior physics. On CapgMyo,
+  whose neighbourhood carries almost no MI (+1.45% total), re-routing is worth +0.003% — you cannot re-route your
+  way to information that isn't there.
+- **`LMS4+Rice+xscale_sel` (kept).** The channel-count gate is mechanically exact — OTB reproduces `bestpartner`
+  and all three `C≥128` sets reproduce `jointbp2` to all printed digits, at zero side-info — but its **premise is
+  refuted**: jointbp2 is *not* the per-scale winner at C≥128 (it loses CEMHSEY −0.168% and CapgMyo −0.014%).
+  Hyser and CapgMyo are the *same* 8×16/128-ch geometry and fall on opposite sides, so array size cannot be the
+  discriminator; local-MI rank is set by pitch/filtering/referencing. Measured headroom for a *fixed* gate: an
+  oracle over {bestpartner, jointbp2} reaches 1.741222 mean (+0.238%); the `C` gate captures **79%** of it.
+- **`LMS4+Rice+xchan_lagbp` (kept).** The lag axis is real physics but a losing *selection* axis. Isolated against
+  its exact `D=0` twin: **−4.543% otb / −0.052% hyser / −0.040% cemhsey / +0.362% capgmyo**. Two compounding
+  causes, both measured: (1) the selector scores the *cross-residual* Rice length while the bill is the
+  *post-LMS-residual* Rice length — a lag rotates the parent's phase and de-whitens what the LMS must predict, a
+  cost the selector cannot see (worst exactly where the temporal predictor matters most, OTB); (2) widening the
+  backward scan 4 → 68 candidates amplifies the backward-vs-offline penalty **11×** (−0.41% for 4 candidates,
+  −4.54% for 68). Where it wins is exactly where theory says it must: CapgMyo, whose band-pass differential
+  referencing filters the zero-lag common mode away but cannot remove the propagation delay — **65.4% of its
+  selections use d≠0** (peaked at d=−1), and it takes the strict maximum CapgMyo ratio of the whole registry
+  (1.3578× > wavpack 1.3472×).
+- **Retirement audit: NONE.** An automated domination scan over all `embedded_ok` codecs on the 4 real sets finds
+  no registered codec with ≤ cost and ≥ ratio on all four for any of the three candidates. `xscale_sel` strictly
+  beats `bestpartner` on Hyser and `jointbp2` on OTB; `lagbp` holds the max CapgMyo ratio; `mst` is the max-ratio
+  point outright. Retired count stays at **nine**.
+- **Sanity gates:** max real ratio anywhere this cycle 2.1795× (`acar_sel`, OTB) ≪ the 6× broadband ceiling; all
+  120 bench rows `ok=True` (no FAIL bit-exact); no incumbent regression — every registered codec reproduces its
+  previously promoted value exactly (`bestpartner` 2.161938 / 1.480384 / 1.350480 / 1.955547, `jointbp2` hyser
+  1.496924, `acar_sel` otb 2.179540).
+- **Search reconfirmation** (`results/cycle_search.csv`, 60 configs on hyser+otb): best embeddable config is
+  unchanged at `lms4s7+x6/b512`, mean **1.820×**, cost **0.027**, `neural_ok=OK`, enc 26 cyc/sample-ch. Ablation
+  from best: cross-channel on→off costs **−14.83%**, order 4→8 costs −0.79%, shift 7→8 −0.15%, block 512→256
+  −0.15%. Pareto front: `delta+x6/b512` 1.749×/0.016, `fixed+x6/b512` 1.792×/0.025, `lms4s7+x6/b512` 1.820×/0.027.
+- **Net:** the ratio headline moved for the first time since cycle 7, by +0.255% and at 2.69× the cost, on the one
+  spatial axis nobody had tried (the dependency graph). Its scientific value is the *negative* half — parent
+  identity, parent count and parent lag are now all measured to their own optima and each is worth ≤1%, so the
+  rank-1 pairwise family is within ~0.5% of its information-theoretic ceiling and the remaining spatial bits are
+  not first-order-pairwise. **Port pick unchanged.**
+
 ## Best embeddable after search (real Hyser)
 
 `research/search.py` on `hyser_1dof_f1_s1` (15 000 samples, `results/06_search_hyser.csv`):
@@ -443,6 +540,17 @@ by each set's real neighbour correlation, consistent with the sweep.
   2-parent predictor (cost 0.0366, zero side-info) is an even cheaper near-tie that *wins*
   the primary Hyser (1.4930×) but regresses on OTB/CEMHSEY — a strong value alternative,
   not a strict ratio win. **The headline best-ratio codec stays `LMS4+Rice+xchan_bestpartner`.**
+- **2026-08-01 update (cycle 13) — the headline best-ratio codec moved to `LMS4+Rice+xchan_mst`; the PORT PICK
+  DID NOT MOVE.** `xchan_mst` (Chow–Liu MST parents + topological coding order, zero side-info) strictly beats
+  `LMS4+Rice+xchan_bestpartner` on **all four** real sets (otb 2.1727×, hyser 1.4831×, capgmyo 1.3529×, cemhsey
+  1.9575×; mean +0.255%) and is the new best-ratio embeddable. **Do not port it yet:** cost 0.106 = 2.69× the
+  prior best's for +0.255%, and it **fails the tight 30 kS/s neural budget** (155 > 125 cyc/sample-ch) — the
+  whole added cost is the per-block edge-scoring + Prim scan (100 of 129 enc ops/sample-ch), not the per-sample
+  apply, which is identical to best-partner's. The value/minimal-hardware pick therefore stays
+  **`lms4s7+x6/b512`** (1.820× hyser+otb mean, cost 0.027, `neural_ok=OK`, 26 cyc/sample-ch, reconfirmed by this
+  cycle's search), and the fully streaming-legal drop-in stays **`LMS4+Rice+xchan_bestpartner_adaptive`**
+  (0.0387, zero side-info). If a per-block O(C²) scan is ever affordable on-node — e.g. sEMG-only at 2 kS/s,
+  where it uses ~8% of the budget — `xchan_mst` is the ratio-maximal choice and needs no side-info at all.
 
 ## Status vs. the 6-stage plan
 
