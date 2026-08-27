@@ -132,10 +132,22 @@ the full reference-model TB against the cores (expect `ALL CHECKS PASSED`,
 top against the **real Xilinx unisim models** (MMCM, IBUFDS, ODDR) and, in
 both switch positions, checks ROM identity, the reg-59 A/B DDR markers, a
 WRITE echo/readback, and that the pseudo-diff N legs track ~P (expect
-`TOP SMOKE PASSED`). Waveforms land in `sim/*.vcd`. GUI alternative: add
-`rtl/*.sv`, `sim/*.sv` (minus `iverilog_stubs.sv`) and `mem/*.mem` as
-simulation sources, pick `tb_rhd2164` or `tb_top_arty` as simulation top, and
-Run Simulation → `run all`.
+`TOP SMOKE PASSED`).
+
+**Seeing the waveforms.** The batch run logs *every* signal of both benches
+into Vivado waveform databases — open one in the Vivado waveform viewer via
+the Tcl console: `open_wave_database sim/xsim_top.wdb` (or `sim/xsim_core.wdb`).
+For a live session instead, `./sim/run_xsim.sh gui` (or `gui core`) opens the
+xsim GUI on the elaborated bench: add signals from the Scope/Objects panes,
+then type `run all` — good scopes to watch are `dut/sw_mode`, the muxed
+`cs_mux`/`sclk_mux`/`mosi_mux`, and inside `dut/u_chip0` the `u_frontend`
+`cmd_word`/`cmd_valid`, decoder `result_a`/`result_b`, and `u_ddr/miso_out`.
+Both benches also dump VCDs (`sim/*.vcd`) for GTKWave. Project-GUI
+alternative: add `rtl/*.sv`, `sim/*.sv` (minus `iverilog_stubs.sv`) and
+`mem/*.mem` as simulation sources, pick `tb_rhd2164` or `tb_top_arty` as
+simulation top, and Run Simulation — the wave window opens with the bench's
+top-level signals; drag internal ones in from the Scope pane and `restart` +
+`run all` to recapture them from time zero.
 
 ### Talking to it from your controller code
 
