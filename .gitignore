@@ -1,4 +1,5 @@
 # Vivado
+vivado/out/
 *.jou
 *.log
 .Xil/

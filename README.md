@@ -1,7 +1,6 @@
 # RHD2164 Emulator (SystemVerilog, Spartan-7)
 
-<!-- CI badge: update <USER>/<REPO> to your GitHub path after pushing. -->
-<!-- ![sim](https://github.com/<USER>/<REPO>/actions/workflows/sim.yml/badge.svg) -->
+![sim](https://github.com/vmani123/RHD2164-FPGA-Emulator/actions/workflows/sim.yml/badge.svg)
 
 A synthesizable SystemVerilog emulator of **two Intan RHD2164** digital
 electrophysiology interface chips, targeting the AMD/Xilinx **XC7S25**
@@ -46,11 +45,14 @@ during development (see git history).
 
 ```
 rtl/    spi_frontend, command_decoder, register_file, ddr_miso,
-        rhd2164_emulator (core), rhd2164_top (Vivado synthesis wrapper)
+        rhd2164_emulator (core), rhd2164_top (LVDS synthesis top),
+        rhd2164_top_se (single-ended bench top for Arty S7 / Pmod)
 sim/    tb_rhd2164 (reference model + coverage), run_sim.sh
-mem/    chipN_{A,B}.mem  channel data patterns
-constraints/  rhd2164_top.xdc  (XC7S25 pins/LVDS/timing)
+mem/    chipN_{A,B}.mem  channel playback data (256 samples x 32 ch each)
+constraints/  rhd2164_top.xdc (LVDS, custom board)  arty_s7.xdc (Arty S7 Pmod)
+vivado/ build_arty_s7.tcl  (one-command batch build -> vivado/out/*.bit)
 docs/   SPEC.md (distilled protocol), WALKTHROUGH.md (line-by-line guide)
+host_tools/  gen_neural_mem.py (playback data), emu_verify.py (bit-exact check)
 ```
 
 ## Simulate
@@ -71,6 +73,63 @@ Waveforms are written to `sim/tb_rhd2164.vcd` (open with GTKWave).
 2. **Edit the XDC**: fill in every `<PIN>` placeholder from your board, and
    confirm the LVDS bank VCCO (the file assumes `LVDS_25` / a 2.5 V bank).
 3. Clocking: 100 MHz oscillator → MMCM → 400 MHz fast oversampling clock.
+
+## Run it on a Digilent Arty S7
+
+The Arty S7's banks are 3.3 V (and 1.35 V), so true LVDS is not possible on
+this board; use the **single-ended bench top** `rhd2164_top_se` +
+`constraints/arty_s7.xdc` (SPI over Pmod JA, 3.3 V logic) to bring up your
+controller code against the emulator. Batch build:
+
+```bash
+vivado -mode batch -source vivado/build_arty_s7.tcl                          # Arty S7-25
+vivado -mode batch -source vivado/build_arty_s7.tcl -tclargs xc7s50csga324-1 # Arty S7-50
+```
+
+The bitstream lands in `vivado/out/rhd2164_top_se.bit` (the script fails if
+timing isn't met — check `vivado/out/timing_summary.rpt`). GUI alternative:
+create a project for your board's part, add `rtl/*.sv` + `mem/*.mem` +
+`constraints/arty_s7.xdc`, set `rhd2164_top_se` as top, Generate Bitstream,
+program over USB (Hardware Manager). After programming, **LD2 lights (MMCM
+locked) and LD3 blinks** (~0.7 s heartbeat).
+
+**Wiring (Pmod JA):** JA1=CS, JA3=SCLK, JA7=MOSI, JA9=MISO0 (chip 0),
+JA10=MISO1 (chip 1), JA5/JA11=GND — full table in `arty_s7.xdc`. 3.3 V logic
+only; always share ground with your master. CS idles high (internal pull-up),
+so the emulator sits quiet until you drive it.
+
+### Talking to it from your controller code
+
+- **Protocol**: CPOL=0, 16-bit words MSB first; CS must pulse high between
+  *every* word (≥ 154 ns) and each result comes back **two CS cycles** after
+  its command (see `docs/SPEC.md`). Spec max SCLK is 24 MHz; over Pmod jumper
+  wires stay ≤ ~8–10 MHz, and start slower.
+- **The DDR MISO split** (the RHD2164's quirk): module **A** bits (channels
+  0–31, and most register reads) are valid on the 16 SCLK **falling** edges;
+  module **B** bits (channels 32–63, regs 18–21, reg 59 = `0x3A`) on rising
+  edges 2–16 **plus B\[0\] on the CS rising edge**. A standard SPI peripheral
+  in mode 0 sends commands correctly but only captures the B stream (shifted,
+  missing B\[0\]) — fine for smoke tests, not full data.
+- **Capture options**, simplest first: (1) **bit-bang GPIO** at ≤ 1 MHz and
+  sample MISO after each edge + after CS↑ — complete A+B capture, best first
+  step; (2) master SPI in mode 0 for TX + a second **receive-only slave SPI**
+  (CPOL=0/CPHA=1, fed the same SCLK/CS) which samples on falling edges and
+  captures the full A stream; (3) a DDR-capable peripheral or your own FPGA
+  logic for full rate.
+
+### Bring-up checklist (hardware verification)
+
+1. `READ(40..44)` → `'I' 'N' 'T' 'A' 'N'`; `READ(62)` → `0x40` (64 amps);
+   `READ(63)` → `0x04` (chip ID). Remember the 2-command pipeline.
+2. `READ(59)` → `0x35` on the A stream, `0x3A` on B — proves you're really
+   seeing both DDR streams, on both MISO0 and MISO1.
+3. `CONVERT(ch)` for ch 1..31 returns the current playback sample from
+   `mem/chip*_{A,B}.mem` on A/B. The playback pointer only advances on
+   `CONVERT(0)` (one step per full 32-channel sweep), so **avoid channel 0 to
+   read static values**, or regenerate simple deterministic patterns first:
+   `python3 host_tools/gen_neural_mem.py --mode simple --seconds 1.0`.
+4. Stream sweeps and compare against the `.mem` contents (bit-exact check
+   logic lives in `host_tools/emu_verify.py`).
 
 ## Scope / honesty
 
