@@ -45,11 +45,12 @@ during development (see git history).
 
 ```
 rtl/    spi_frontend, command_decoder, register_file, ddr_miso,
-        rhd2164_emulator (core), rhd2164_top (LVDS synthesis top),
-        rhd2164_top_se (single-ended bench top for Arty S7 / Pmod)
-sim/    tb_rhd2164 (reference model + coverage), run_sim.sh
+        rhd2164_emulator (core), rhd2164_top (LVDS top, 2.5 V-bank boards),
+        rhd2164_top_arty (Arty S7 bench top: SW0 picks SE or LVDS interface)
+sim/    tb_rhd2164 (reference model + coverage), tb_top_arty (top-level smoke),
+        run_sim.sh (iverilog), run_xsim.sh (Vivado xsim), iverilog_stubs.sv
 mem/    chipN_{A,B}.mem  channel playback data (256 samples x 32 ch each)
-constraints/  rhd2164_top.xdc (LVDS, custom board)  arty_s7.xdc (Arty S7 Pmod)
+constraints/  rhd2164_top.xdc (LVDS, custom board)  arty_s7.xdc (Arty S7)
 vivado/ build_arty_s7.tcl  (one-command batch build -> vivado/out/*.bit)
 docs/   SPEC.md (distilled protocol), WALKTHROUGH.md (line-by-line guide)
 host_tools/  gen_neural_mem.py (playback data), emu_verify.py (bit-exact check)
@@ -64,7 +65,10 @@ install icarus-verilog` / `apt-get install iverilog`).
 ./sim/run_sim.sh          # compiles, runs, exits non-zero on any failure
 ```
 
-Waveforms are written to `sim/tb_rhd2164.vcd` (open with GTKWave).
+Waveforms are written to `sim/tb_rhd2164.vcd` (open with GTKWave). This runs
+the reference-model TB **and** the Arty top-level smoke test (with stubbed
+Xilinx primitives). Have Vivado instead? `./sim/run_xsim.sh` runs the same
+two benches under xsim, with the top elaborated against the real unisims.
 
 ## Synthesize (Vivado, XC7S25)
 
@@ -76,27 +80,62 @@ Waveforms are written to `sim/tb_rhd2164.vcd` (open with GTKWave).
 
 ## Run it on a Digilent Arty S7
 
-The Arty S7's banks are 3.3 V (and 1.35 V), so true LVDS is not possible on
-this board; use the **single-ended bench top** `rhd2164_top_se` +
-`constraints/arty_s7.xdc` (SPI over Pmod JA, 3.3 V logic) to bring up your
-controller code against the emulator. Batch build:
+The Arty top `rhd2164_top_arty` + `constraints/arty_s7.xdc` carries **both**
+SPI interfaces in one bitstream; slide switch **SW0** selects which one feeds
+the two emulated chips (**LD4 lit = LVDS mode**). Flip it while the bus is
+idle.
+
+| SW0 | Interface | Connector |
+|-----|-----------|-----------|
+| 0 | single-ended 3.3 V CMOS | Pmod JA |
+| 1 | differential, like the real chip's LVDS bus | Pmod JB (+ JC1/2) |
+
+Batch build:
 
 ```bash
 vivado -mode batch -source vivado/build_arty_s7.tcl                          # Arty S7-25
 vivado -mode batch -source vivado/build_arty_s7.tcl -tclargs xc7s50csga324-1 # Arty S7-50
 ```
 
-The bitstream lands in `vivado/out/rhd2164_top_se.bit` (the script fails if
+The bitstream lands in `vivado/out/rhd2164_top_arty.bit` (the script fails if
 timing isn't met — check `vivado/out/timing_summary.rpt`). GUI alternative:
 create a project for your board's part, add `rtl/*.sv` + `mem/*.mem` +
-`constraints/arty_s7.xdc`, set `rhd2164_top_se` as top, Generate Bitstream,
+`constraints/arty_s7.xdc`, set `rhd2164_top_arty` as top, Generate Bitstream,
 program over USB (Hardware Manager). After programming, **LD2 lights (MMCM
 locked) and LD3 blinks** (~0.7 s heartbeat).
 
-**Wiring (Pmod JA):** JA1=CS, JA3=SCLK, JA7=MOSI, JA9=MISO0 (chip 0),
-JA10=MISO1 (chip 1), JA5/JA11=GND — full table in `arty_s7.xdc`. 3.3 V logic
-only; always share ground with your master. CS idles high (internal pull-up),
-so the emulator sits quiet until you drive it.
+**Single-ended wiring (SW0=0, Pmod JA):** JA1=CS, JA3=SCLK, JA7=MOSI,
+JA9=MISO0 (chip 0), JA10=MISO1 (chip 1), JA5/JA11=GND. 3.3 V logic only;
+always share ground with your master. CS idles high (internal pull-up), so
+the emulator sits quiet until you drive it.
+
+**Differential wiring (SW0=1, Pmod JB/JC):** JB1/2=CS±, JB3/4=SCLK±,
+JB7/8=MOSI±, JB9/10=MISO0±, JC1/2=MISO1± — full table in `arty_s7.xdc`.
+Electrical honesty, since the Arty S7 has no 2.5 V bank: the three inputs are
+**true LVDS_25 receivers** (allowed at VCCO 3.3 V with `DIFF_TERM FALSE` per
+UG471 — add an **external 100 Ω resistor across each input pair** at the
+Pmod), while the MISO pairs are **pseudo-differential** (complementary 3.3 V
+CMOS legs, launched by paired IOB ODDRs). Protocol-identical to the chip; to
+drive a true LVDS *receiver* at spec levels, add a resistor divider network
+or use `rhd2164_top` on a board with a 2.5 V bank.
+
+### Sanity-check with Vivado xsim first
+
+```bash
+source /opt/Xilinx/Vivado/<version>/settings64.sh   # puts xvlog/xelab/xsim on PATH
+./sim/run_xsim.sh
+```
+
+This runs two self-checking benches and exits non-zero on any failure:
+the full reference-model TB against the cores (expect `ALL CHECKS PASSED`,
+153 transfers, 0 errors) and `sim/tb_top_arty.sv`, which elaborates the Arty
+top against the **real Xilinx unisim models** (MMCM, IBUFDS, ODDR) and, in
+both switch positions, checks ROM identity, the reg-59 A/B DDR markers, a
+WRITE echo/readback, and that the pseudo-diff N legs track ~P (expect
+`TOP SMOKE PASSED`). Waveforms land in `sim/*.vcd`. GUI alternative: add
+`rtl/*.sv`, `sim/*.sv` (minus `iverilog_stubs.sv`) and `mem/*.mem` as
+simulation sources, pick `tb_rhd2164` or `tb_top_arty` as simulation top, and
+Run Simulation → `run all`.
 
 ### Talking to it from your controller code
 

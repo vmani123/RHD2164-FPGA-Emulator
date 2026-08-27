@@ -23,7 +23,7 @@ foreach f [glob [file join $root mem *.mem]] { file copy -force $f . }
 read_verilog -sv [glob [file join $root rtl *.sv]]
 read_xdc [file join $root constraints arty_s7.xdc]
 
-synth_design -top rhd2164_top_se -part $part
+synth_design -top rhd2164_top_arty -part $part
 opt_design
 place_design
 route_design
@@ -38,5 +38,5 @@ if {$wns < 0} {
     exit 1
 }
 
-write_bitstream -force rhd2164_top_se.bit
-puts "DONE: [file join $out rhd2164_top_se.bit]  (WNS = $wns ns)"
+write_bitstream -force rhd2164_top_arty.bit
+puts "DONE: [file join $out rhd2164_top_arty.bit]  (WNS = $wns ns)"
