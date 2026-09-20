@@ -46,10 +46,13 @@ during development (see git history).
 
 ```
 rtl/    spi_frontend, command_decoder, register_file, ddr_miso,
-        rhd2164_emulator (core), rhd2164_top (Vivado synthesis wrapper)
+        rhd2164_emulator (core),
+        rhd2164_top     (Vivado synthesis wrapper, LVDS I/O)
+        rhd2164_top_se  (same, single-ended I/O — Arty S7 bring-up)
 sim/    tb_rhd2164 (reference model + coverage), run_sim.sh
 mem/    chipN_{A,B}.mem  channel data patterns
-constraints/  rhd2164_top.xdc  (XC7S25 pins/LVDS/timing)
+constraints/  rhd2164_top.xdc             (XC7S25 pins/LVDS/timing)
+              rhd2164_top_se_arty_s7.xdc  (Arty S7-25/S7-50, LVCMOS33 on Pmod JA)
 docs/   SPEC.md (distilled protocol), WALKTHROUGH.md (line-by-line guide)
 ```
 
@@ -71,6 +74,44 @@ Waveforms are written to `sim/tb_rhd2164.vcd` (open with GTKWave).
 2. **Edit the XDC**: fill in every `<PIN>` placeholder from your board, and
    confirm the LVDS bank VCCO (the file assumes `LVDS_25` / a 2.5 V bank).
 3. Clocking: 100 MHz oscillator → MMCM → 400 MHz fast oversampling clock.
+
+## Single-ended mode (Arty S7 bring-up)
+
+`rhd2164_top.sv` presents the SPI bus as LVDS, which is correct for a real
+headstage cable and for the custom PCB. It cannot be built for a Digilent
+**Arty S7**: every user I/O bank on that board is hard-wired to VCCO = 3.3 V,
+and a 7-series HR bank only supports `LVDS_25` (VCCO 2.375–2.625 V). Vivado
+rejects it at DRC.
+
+`rtl/rhd2164_top_se.sv` is the single-ended sibling. It keeps the emulator
+cores byte-identical and swaps only the pad buffers — `IBUFDS` → `IBUF`,
+`OBUFDS` → `OBUF`, LVCMOS33 pins on Pmod JA — so the bit-level protocol on the
+wire is unchanged. Pick it as the Vivado top instead of `rhd2164_top`, and use
+`constraints/rhd2164_top_se_arty_s7.xdc`. The S7-25 and S7-50 have identical
+pinouts, so that one file covers both boards.
+
+| JA pin | Package pin | Emulator | Controller board |
+|---|---|---|---|
+| JA1 | L17 | `cs_in` (in) | `cs_out` (out) |
+| JA2 | L18 | `sclk_in` (in) | `sclk_out` (out) |
+| JA3 | M14 | `mosi_in` (in) | `mosi_out` (out) |
+| JA4 | N14 | `miso0_out` (out) | `miso0_in` (in) |
+| JA7 | M16 | `miso1_out` (out) | `miso1_in` (in) |
+| JA5/11 | — | GND | GND |
+
+Same positions on both ends, so a straight-through female-to-female 12-pin
+Pmod ribbon works. **Do not bridge JA6/JA12 (VCC) between two separately
+powered boards** — use five signal jumpers plus a ground, or pull the two VCC
+conductors from the ribbon.
+
+Two board notes that catch people: the Arty S7's 100 MHz oscillator is on
+**R2 with `IOSTANDARD SSTL135`** (it sits in the DDR3 bank), not LVCMOS33; and
+Arty S7 boards are speed grade **−1**, so if 400 MHz fails timing set
+`FAST_CLK_DIV = 4.000` for a 200 MHz fast clock — still ~8× oversampling at
+24 MHz SCLK.
+
+The simulation is unaffected: `sim/run_sim.sh` compiles the core sources
+explicitly and neither top is part of the testbench.
 
 ## Scope / honesty
 
